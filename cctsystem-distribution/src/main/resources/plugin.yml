@@ -1,0 +1,28 @@
+name: CCTSystem
+version: '0.1.0-SNAPSHOT'
+main: cn.cctstudio.cctsystem.platform.paper.PaperBootstrap
+api-version: '1.21'
+load: POSTWORLD
+authors: [GouC]
+description: CCTStudio unified network core
+commands:
+  cct:
+    description: CCTSystem player menu
+    usage: /cct [me|vip|exchange|redeem]
+    permission: cctsystem.use
+  cctadmin:
+    description: CCTSystem administrator command
+    usage: /cctadmin <discount|member|redeem>
+    permission: cctsystem.admin
+permissions:
+  cctsystem.use:
+    default: true
+  cctsystem.admin:
+    default: op
+softdepend:
+  - AuthMe
+  - PlayerPoints
+  - Vault
+  - LuckPerms
+  - SkinsRestorer
+  - PlaceholderAPI

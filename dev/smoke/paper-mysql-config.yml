@@ -1,0 +1,45 @@
+network-id: cct-main
+server-id: lobby
+node-id: lobby-mysql-smoke-1
+roles:
+  - gameplay
+
+database:
+  enabled: true
+  jdbc-url: jdbc:mysql://127.0.0.1:33316/cctsystem_smoke?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+  username: cctsmoke
+  password: ${CCTSYSTEM_SMOKE_DB_PASSWORD}
+  maximum-pool-size: 2
+  connection-timeout-ms: 3000
+
+bridge:
+  enabled: false
+  url: wss://api.cctstudio.cn/internal/minecraft/connect
+  secret: ""
+  connect-timeout-seconds: 3
+  request-timeout-seconds: 3
+
+exchange:
+  weekly-limit-points: 300
+  timezone: Asia/Shanghai
+  sources: []
+
+modules:
+  identity:
+    enabled: auto
+  auth:
+    enabled: auto
+  points:
+    enabled: auto
+  exchange:
+    enabled: auto
+  membership:
+    enabled: disabled
+  promotion:
+    enabled: disabled
+  redeem:
+    enabled: disabled
+  skins:
+    enabled: disabled
+  network-status:
+    enabled: disabled

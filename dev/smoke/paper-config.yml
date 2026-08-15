@@ -1,0 +1,40 @@
+network-id: cct-main
+server-id: lobby
+node-id: lobby-smoke-1
+roles:
+  - gameplay
+
+database:
+  enabled: false
+  jdbc-url: ""
+  username: ""
+  password: ""
+  maximum-pool-size: 2
+  connection-timeout-ms: 2000
+
+bridge:
+  enabled: false
+  url: wss://api.cctstudio.cn/internal/minecraft/connect
+  secret: ""
+  connect-timeout-seconds: 3
+  request-timeout-seconds: 3
+
+modules:
+  identity:
+    enabled: disabled
+  auth:
+    enabled: disabled
+  points:
+    enabled: disabled
+  exchange:
+    enabled: disabled
+  membership:
+    enabled: disabled
+  promotion:
+    enabled: disabled
+  redeem:
+    enabled: disabled
+  skins:
+    enabled: disabled
+  network-status:
+    enabled: disabled

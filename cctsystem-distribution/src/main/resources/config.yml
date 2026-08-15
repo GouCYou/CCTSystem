@@ -1,0 +1,108 @@
+# CCTSystem refuses to start until these node identifiers are set.
+network-id: cct-main
+server-id: change-me
+node-id: change-me
+
+# Examples: proxy, network-authority, skin-authority, auth-authority,
+# business-authority, points-authority, gameplay, economy-source
+roles:
+  - gameplay
+
+database:
+  enabled: false
+  jdbc-url: ${CCTSYSTEM_DB_URL:-}
+  username: ${CCTSYSTEM_DB_USER:-}
+  password: ${CCTSYSTEM_DB_PASSWORD:-}
+  maximum-pool-size: 6
+  connection-timeout-ms: 5000
+
+bridge:
+  enabled: false
+  url: ${CCTSYSTEM_BRIDGE_URL:-wss://api.cctstudio.cn/internal/minecraft/connect}
+  secret: ${CCTSYSTEM_BRIDGE_SECRET:-}
+  connect-timeout-seconds: 10
+  request-timeout-seconds: 8
+
+exchange:
+  weekly-limit-points: 300
+  timezone: Asia/Shanghai
+  # Configure a source only on the server that owns that currency.
+  # sources:
+  #   - source-id: survival_coins
+  #     server-id: survival
+  #     currency-display-name: 生存金币
+  #     currency-units-per-point: 100.00
+  #     cap-group: global_currency_exchange
+  #     enabled: true
+  sources: []
+
+membership:
+  quote-ttl-seconds: 60
+  tiers:
+    - key: vip
+      display-name: VIP
+      priority: 100
+      luck-perms-group: vip
+      duration-days: 30
+      price-points: 100
+      upgrade-credit-rate-bps: 10000
+      display-material: GOLD_INGOT
+      benefits: [基础飞行特权, 专属称号]
+      enabled: true
+    - key: vip_plus
+      display-name: VIP+
+      priority: 200
+      luck-perms-group: vip+
+      duration-days: 30
+      price-points: 200
+      upgrade-credit-rate-bps: 10000
+      display-material: DIAMOND
+      benefits: [进阶飞行特权, 专属称号]
+      enabled: true
+    - key: mvp
+      display-name: MVP
+      priority: 300
+      luck-perms-group: mvp
+      duration-days: 30
+      price-points: 400
+      upgrade-credit-rate-bps: 10000
+      display-material: EMERALD
+      benefits: [高级服务器特权, 专属称号]
+      enabled: true
+    - key: mvp_plus
+      display-name: MVP+
+      priority: 400
+      luck-perms-group: mvp+
+      duration-days: 30
+      price-points: 800
+      upgrade-credit-rate-bps: 10000
+      display-material: NETHER_STAR
+      benefits: [完整会员特权, 专属称号]
+      enabled: true
+
+promotion:
+  timezone: Asia/Shanghai
+
+redeem-code:
+  length: 12
+  pepper: ${CCTSYSTEM_REDEEM_PEPPER:-}
+
+modules:
+  identity:
+    enabled: auto
+  auth:
+    enabled: auto
+  points:
+    enabled: auto
+  exchange:
+    enabled: auto
+  membership:
+    enabled: auto
+  promotion:
+    enabled: auto
+  redeem:
+    enabled: auto
+  skins:
+    enabled: auto
+  network-status:
+    enabled: auto
