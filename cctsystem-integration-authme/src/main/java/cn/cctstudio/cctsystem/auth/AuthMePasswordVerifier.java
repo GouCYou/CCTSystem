@@ -2,8 +2,10 @@ package cn.cctstudio.cctsystem.auth;
 
 import fr.xephi.authme.api.v3.AuthMeApi;
 import fr.xephi.authme.api.v3.AuthMePlayer;
+import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 
 public final class AuthMePasswordVerifier implements PasswordVerifier {
     private final AuthMeApi authMe;
@@ -22,6 +24,13 @@ public final class AuthMePasswordVerifier implements PasswordVerifier {
             return AuthVerification.rejected(playerName);
         }
         AuthMePlayer info = player.orElseThrow();
-        return new AuthVerification(true, info.getName(), info.getUuid());
+        UUID playerUuid = info.getUuid().orElseGet(() -> offlineUuid(info.getName()));
+        return new AuthVerification(true, info.getName(), Optional.of(playerUuid));
+    }
+
+    static UUID offlineUuid(String playerName) {
+        return UUID.nameUUIDFromBytes(
+            ("OfflinePlayer:" + playerName).getBytes(StandardCharsets.UTF_8)
+        );
     }
 }
