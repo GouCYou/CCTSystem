@@ -20,21 +20,35 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.google.inject.Inject;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
+import com.velocitypowered.api.event.proxy.ProxyPingEvent;
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
 import com.velocitypowered.api.event.connection.PostLoginEvent;
+import com.velocitypowered.api.event.connection.PluginMessageEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.Dependency;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.ProxyServer;
+import com.velocitypowered.api.proxy.Player;
+import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
+import com.velocitypowered.api.proxy.ServerConnection;
+import java.io.ByteArrayInputStream;
+import java.io.DataInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.time.Duration;
+import java.util.Map;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.UUID;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
+import net.luckperms.api.LuckPerms;
+import net.luckperms.api.LuckPermsProvider;
 import org.slf4j.Logger;
 
 @Plugin(
@@ -43,14 +57,23 @@ import org.slf4j.Logger;
     version = "0.1.0-SNAPSHOT",
     description = "CCTStudio unified network core",
     authors = {"GouC"},
-    dependencies = {@Dependency(id = "skinsrestorer", optional = true)}
+    dependencies = {
+        @Dependency(id = "skinsrestorer", optional = true),
+        @Dependency(id = "luckperms", optional = true)
+    }
 )
 public final class VelocityBootstrap {
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final MinecraftChannelIdentifier NETWORK_CHANNEL =
+        MinecraftChannelIdentifier.from("cctsystem:network");
+    private static final LegacyComponentSerializer LEGACY =
+        LegacyComponentSerializer.legacyAmpersand();
 
     private final ProxyServer proxy;
     private final Path dataDirectory;
     private final VelocityLogger logger;
+    private final Set<UUID> vanished = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final Map<UUID, Instant> shoutCooldowns = new java.util.concurrent.ConcurrentHashMap<>();
     private volatile CctRuntime runtime;
 
     @Inject
@@ -63,6 +86,7 @@ public final class VelocityBootstrap {
     @Subscribe
     public void onProxyInitialization(ProxyInitializeEvent event) {
         try {
+            proxy.getChannelRegistrar().register(NETWORK_CHANNEL);
             CctConfig config = new ConfigLoader().load(prepareConfig());
             CctRuntime created = new CctRuntime(
                 PlatformType.VELOCITY,
@@ -71,6 +95,10 @@ public final class VelocityBootstrap {
                 logger
             );
             configureInfrastructure(created);
+            proxy.getScheduler().buildTask(this, this::refreshVanishTab)
+                .delay(Duration.ofSeconds(1))
+                .repeat(Duration.ofSeconds(1))
+                .schedule();
             runtime = created;
             created.start().whenComplete((ignored, throwable) -> {
                 if (throwable == null) {
@@ -82,6 +110,89 @@ public final class VelocityBootstrap {
         } catch (RuntimeException exception) {
             logger.error("CCTSystem Velocity bootstrap failed", exception);
         }
+    }
+
+    @Subscribe
+    public void onPluginMessage(PluginMessageEvent event) {
+        if (!NETWORK_CHANNEL.equals(event.getIdentifier())) return;
+        event.setResult(PluginMessageEvent.ForwardResult.handled());
+        if (!(event.getSource() instanceof ServerConnection connection)) return;
+        try (DataInputStream input = new DataInputStream(
+            new ByteArrayInputStream(event.getData())
+        )) {
+            String type = input.readUTF();
+            if ("VANISH_STATE".equals(type)) {
+                UUID playerUuid = UUID.fromString(input.readUTF());
+                boolean enabled = input.readBoolean();
+                input.readUTF(); // Source server id is retained in Paper audit records.
+                Player source = connection.getPlayer();
+                if (!source.getUniqueId().equals(playerUuid)
+                    || !source.hasPermission("cctsystem.vanish")) return;
+                if (enabled) {
+                    vanished.add(playerUuid);
+                } else {
+                    vanished.remove(playerUuid);
+                    restoreTab(playerUuid);
+                }
+                refreshVanishTab();
+                return;
+            }
+            if ("CONNECT_LOBBY".equals(type)) {
+                proxy.getServer("lobby").ifPresentOrElse(
+                    server -> connection.getPlayer().createConnectionRequest(server).fireAndForget(),
+                    () -> logger.warn("CCTSystem lobby server is not registered")
+                );
+                return;
+            }
+            if ("SHOUT_V2".equals(type)) {
+                String rendered = input.readUTF();
+                String cooldownMessage = input.available() > 0
+                    ? input.readUTF()
+                    : "&c全服喊话冷却中，请等待 &e{seconds} 秒";
+                if (rendered.isBlank() || rendered.length() > 4096) return;
+                if (!connection.getPlayer().hasPermission("cctsystem.shout")) return;
+                if (!acquireShoutCooldown(connection.getPlayer(), cooldownMessage)) return;
+                Component component = LEGACY.deserialize(rendered);
+                proxy.getAllPlayers().forEach(player -> player.sendMessage(component));
+                return;
+            }
+            if (!"SHOUT".equals(type)) return;
+            String prefix = input.readUTF();
+            String identity = input.readUTF();
+            String separator = input.readUTF();
+            String message = input.readUTF().strip();
+            if (message.isEmpty() || message.length() > 200) return;
+            if (!connection.getPlayer().hasPermission("cctsystem.shout")) return;
+            if (!acquireShoutCooldown(
+                connection.getPlayer(), "&c全服喊话冷却中，请等待 &e{seconds} 秒"
+            )) return;
+            Component rendered = LEGACY.deserialize(prefix)
+                .append(LEGACY.deserialize(identity))
+                .append(LEGACY.deserialize(separator))
+                .append(Component.text(message));
+            proxy.getAllPlayers().forEach(player -> player.sendMessage(rendered));
+        } catch (IOException exception) {
+            logger.warn("Invalid CCTSystem network message", exception);
+        }
+    }
+
+    private boolean acquireShoutCooldown(Player player, String message) {
+        Instant now = Instant.now();
+        Instant[] blockedUntil = new Instant[1];
+        shoutCooldowns.compute(player.getUniqueId(), (ignored, current) -> {
+            if (current != null && current.isAfter(now)) {
+                blockedUntil[0] = current;
+                return current;
+            }
+            return now.plusSeconds(60L);
+        });
+        if (blockedUntil[0] != null) {
+            long millis = Math.max(1L, Duration.between(now, blockedUntil[0]).toMillis());
+            long seconds = Math.max(1L, (millis + 999L) / 1000L);
+            player.sendMessage(LEGACY.deserialize(message.replace("{seconds}", Long.toString(seconds))));
+            return false;
+        }
+        return true;
     }
 
     @Subscribe
@@ -112,6 +223,15 @@ public final class VelocityBootstrap {
             logger.warn("Unable to update connected player identity", throwable);
             return null;
         }));
+        refreshVanishTab();
+    }
+
+    @Subscribe
+    public void onProxyPing(ProxyPingEvent event) {
+        int visible = (int) proxy.getAllPlayers().stream()
+            .filter(player -> !vanished.contains(player.getUniqueId()))
+            .count();
+        event.setPing(event.getPing().asBuilder().onlinePlayers(visible).build());
     }
 
     private Path prepareConfig() {
@@ -151,6 +271,10 @@ public final class VelocityBootstrap {
             if (config.roles().contains(NodeRole.NETWORK_AUTHORITY)) {
                 baseCapabilities.add(Capability.NETWORK_STATUS_READ);
                 router.register(Capability.NETWORK_STATUS_READ.value(), ignored -> networkStatus());
+                if (proxy.getPluginManager().getPlugin("luckperms").isPresent()) {
+                    baseCapabilities.add(Capability.PROFILE_READ);
+                    router.register(Capability.PROFILE_READ.value(), this::playerProfile);
+                }
             }
             created.addAfterModules(new BridgeClient(
                 config,
@@ -175,16 +299,73 @@ public final class VelocityBootstrap {
 
     private CompletableFuture<com.fasterxml.jackson.databind.JsonNode> networkStatus() {
         ObjectNode root = JSON.createObjectNode();
-        root.put("onlinePlayers", proxy.getPlayerCount());
+        root.put("onlinePlayers", proxy.getAllPlayers().stream()
+            .filter(player -> !vanished.contains(player.getUniqueId())).count());
         ArrayNode servers = root.putArray("servers");
         proxy.getAllServers().stream()
             .sorted(java.util.Comparator.comparing(server -> server.getServerInfo().getName()))
             .forEach(server -> {
                 ObjectNode item = servers.addObject();
                 item.put("id", server.getServerInfo().getName());
-                item.put("onlinePlayers", server.getPlayersConnected().size());
+                item.put("onlinePlayers", server.getPlayersConnected().stream()
+                    .filter(player -> !vanished.contains(player.getUniqueId())).count());
                 item.put("registered", true);
             });
         return CompletableFuture.completedFuture(root);
+    }
+
+    private CompletableFuture<com.fasterxml.jackson.databind.JsonNode> playerProfile(
+        com.fasterxml.jackson.databind.JsonNode payload
+    ) {
+        if (payload == null || !payload.path("playerUuid").isTextual()) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException("Invalid player profile request"));
+        }
+        final UUID playerUuid;
+        try {
+            playerUuid = UUID.fromString(payload.path("playerUuid").textValue());
+        } catch (IllegalArgumentException exception) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException("Invalid player profile request"));
+        }
+        LuckPerms luckPerms = LuckPermsProvider.get();
+        return luckPerms.getUserManager().loadUser(playerUuid).thenApply(user -> {
+            ObjectNode result = JSON.createObjectNode();
+            result.put("online", proxy.getPlayer(playerUuid).isPresent()
+                && !vanished.contains(playerUuid));
+            result.put("primaryGroup", user.getPrimaryGroup());
+            String customTitle = user.getCachedData().getMetaData().getMetaValue("cct-title");
+            String prefix = customTitle == null
+                ? user.getCachedData().getMetaData().getPrefix()
+                : customTitle;
+            if (prefix == null || prefix.isBlank()) {
+                result.putNull("title");
+            } else {
+                result.put("title", prefix);
+            }
+            return result;
+        });
+    }
+
+    private void refreshVanishTab() {
+        for (Player viewer : proxy.getAllPlayers()) {
+            for (UUID hidden : vanished) {
+                if (!viewer.getUniqueId().equals(hidden)) {
+                    viewer.getTabList().removeEntry(hidden);
+                }
+            }
+        }
+    }
+
+    private void restoreTab(UUID playerUuid) {
+        proxy.getPlayer(playerUuid).ifPresent(target -> {
+            for (Player viewer : proxy.getAllPlayers()) {
+                if (viewer.getTabList().containsEntry(playerUuid)) continue;
+                viewer.getTabList().addEntry(viewer.getTabList().buildEntry(
+                    target.getGameProfile(),
+                    Component.text(target.getUsername()),
+                    (int) Math.min(Integer.MAX_VALUE, target.getPing()),
+                    0
+                ));
+            }
+        });
     }
 }

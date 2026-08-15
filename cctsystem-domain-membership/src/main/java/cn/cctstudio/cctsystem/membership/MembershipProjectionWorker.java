@@ -54,7 +54,9 @@ final class MembershipProjectionWorker {
         if (!running.compareAndSet(false, true)) {
             return;
         }
-        store.pendingProjections(clock.instant(), 25)
+        java.time.Instant now = clock.instant();
+        store.reconcileExpired(now, 50)
+            .thenCompose(ignored -> store.pendingProjections(now, 25))
             .thenCompose(projections -> {
                 CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
                 for (MembershipProjection projection : projections) {

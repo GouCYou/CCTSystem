@@ -27,7 +27,8 @@ final class DefaultConfigTest {
         CctConfig config = new ConfigLoader().load(configPath);
 
         assertEquals(4, config.membership().tiers().size());
-        assertEquals("vip+", config.membership().tiers().get(1).luckPermsGroup());
+        assertEquals("vipp", config.membership().tiers().get(1).luckPermsGroup());
+        assertEquals(365, config.membership().maxPurchaseDays());
         assertEquals(12, config.redeemCode().length());
     }
 }

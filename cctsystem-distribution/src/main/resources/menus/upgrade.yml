@@ -1,0 +1,21 @@
+rows: 3
+title-key: menus.upgrade.title
+
+fill:
+  enabled: false
+  material: AIR
+  slots: []
+
+items:
+  pause:
+    slot: 11
+    material: CHEST
+    action: UPGRADE_PAUSE
+  credit:
+    slot: 15
+    material: ANVIL
+    action: UPGRADE_CREDIT
+  back:
+    slot: 22
+    material: ARROW
+    action: OPEN_MEMBERSHIP

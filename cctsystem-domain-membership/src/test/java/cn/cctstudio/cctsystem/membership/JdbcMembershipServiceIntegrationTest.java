@@ -65,8 +65,11 @@ final class JdbcMembershipServiceIntegrationTest {
             store,
             points,
             promotions,
+            ignored -> CompletableFuture.completedFuture(new MembershipAccess(java.util.Set.of("default"))),
             Clock.fixed(NOW, ZoneOffset.UTC),
-            60
+            60,
+            365,
+            java.util.Set.of("helper", "mod", "admin", "owner")
         );
     }
 

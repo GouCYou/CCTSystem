@@ -1,0 +1,294 @@
+commands:
+  player-description: "CCTSystem 玩家菜单"
+  player-usage: "/cct help"
+  admin-description: "CCTSystem 管理命令"
+  admin-usage: "/cctadmin help"
+  only-player: "&c该命令只能由玩家使用"
+  no-permission: "&c没有权限"
+  invalid-arguments: "&c参数无效"
+  reloaded: "&aCCTSystem 配置已重载"
+  reload-failed: "&c配置重载失败，请检查控制台"
+  player-help:
+    - "&6&lCCTSystem"
+    - "&e/cct me &7- 打开个人中心"
+    - "&e/cct vip &7- 打开会员中心"
+    - "&e/cct exchange [1|10|100|max] &7- 兑换点券"
+    - "&e/cct redeem <兑换码> &7- 使用兑换码"
+    - "&e/cct shout <内容> &7- 发送跨服消息"
+    - "&e/nick &7- 打开书本式匿名身份设置"
+    - "&e/unnick &7- 关闭匿名身份"
+    - "&e/rewards &7- 打开奖励中心"
+    - "&e/lobby &7- 返回大厅"
+    - "&e/cct help &7- 查看本帮助"
+
+  admin-help:
+    - "&6&lCCTSystem 管理帮助"
+    - "&e/v &7- 切换全服隐身（Admin 及以上）"
+    - "&e/cctadmin member info <玩家> &7- 查询会员"
+    - "&e/cctadmin member grant <玩家> <等级> <天数> <原因> &7- 发放会员"
+    - "&e/cctadmin member extend <玩家> <等级> <天数> <原因> &7- 延长指定会员"
+    - "&e/cctadmin member reclaim <玩家> <等级> <原因> &7- 回收指定会员全部时间"
+    - "&e/cctadmin member <pause|resume> <玩家> <原因> &7- 暂停或恢复会员"
+    - "&e/cctadmin member expiry <玩家> <yyyy-MM-dd> <HH:mm> <原因> &7- 修改到期时间"
+    - "&e/cctadmin discount create membership <off%> <yyyy-MM-dd> <HH:mm> <all|等级> [备注] &7- 开启折扣"
+    - "&e/cctadmin discount <stop|info> <完整ID> [原因] &7- 停止或查询折扣"
+    - "&e/cctadmin discount list &7- 列出当前折扣"
+    - "&e/cctadmin redeem generate points <数量> <每码次数> <点券> <有效天数|never> [备注] &7- 生成点券码"
+    - "&e/cctadmin redeem generate membership <数量> <每码次数> <等级> <会员天数> <有效天数|never> [备注] &7- 生成会员码"
+    - "&e/cctadmin reload &7- 重载消息与菜单配置"
+
+vanish:
+  processing: "&e正在同步隐身状态…"
+  enabled: "&a已进入全服隐身"
+  disabled: "&e已退出全服隐身"
+  failed: "&c隐身状态同步失败，请稍后重试"
+  bossbar: "&f隐身中"
+  silent-container: "&8静默查看"
+
+redeem:
+  service-unavailable: "&c兑换码服务暂不可用"
+  processing: "&7正在兑换…"
+  failed: "&c兑换失败，请检查兑换码"
+  completed: "&a兑换成功"
+  reward: "&7获得 &f{reward}"
+  review-required: "&e兑换处理中，请勿重复提交"
+  incomplete: "&c兑换未完成"
+  usage: "&7使用 /cct redeem <兑换码>"
+
+chat:
+  shout-prefix: "&6[喊话] &b[{server}] "
+  shout-usage: "&7使用 /shout <内容>（最多 200 字）"
+  shout-failed: "&c跨服消息发送失败"
+  shout-cooldown: "&c全服喊话冷却中，请等待 &e{seconds} 秒"
+  servers:
+    lobby: "大厅"
+    survival: "生存"
+    creative: "创造"
+    login: "登录"
+
+nickname:
+  usage: "&7使用 /nick [random|rank <等级>|skin <RESET/RANDOM/REAL>|reuse|reset]"
+  processing: "&e正在保存匿名身份…"
+  enabled: "&a匿名身份已启用：{identity}"
+  disabled: "&a匿名身份已关闭"
+  save-failed: "&c匿名身份保存失败，请稍后重试"
+  name-in-use: "&c这个昵称刚刚被其他玩家使用，请重新随机"
+  invalid-name: "&c昵称只能包含 3-16 位英文字母、数字或下划线"
+  invalid-rank: "&c无效的匿名称号"
+  invalid-skin: "&c无效的匿名皮肤选项"
+  no-previous: "&c没有可复用的历史昵称"
+  daily-limit: "&c今天已经更换过 6 次昵称，请明天再试"
+  book:
+    title: "&8匿名身份"
+    intro: "&0匿名身份会隐藏你的真实昵称、称号与皮肤。所有操作都会记录，管理员仍可识别真实身份。"
+    start: "&2&l[我已了解，开始设置]"
+    choose-rank: "&0请选择匿名时显示的称号："
+    choose-skin: "&0请选择匿名时使用的皮肤："
+    choose-name: "&0请选择要使用的随机昵称："
+    skin-real: "&2[使用真实皮肤]"
+    skin-steve: "&2[Steve]"
+    skin-alex: "&2[Alex]"
+    skin-random: "&2[随机皮肤]"
+    use-name: "&2&l[使用这个昵称]"
+    reroll: "&1[换一个随机昵称]"
+    reuse: "&5[复用上一个昵称]"
+  menu:
+    title: "&8匿名身份"
+    profile-lore:
+      - "&7真实身份  &f{real}"
+      - "&7匿名昵称  &f{nick}"
+    name: "&e随机昵称  &f{name}"
+    name-lore: ["&7点击重新随机"]
+    rank: "&6显示称号"
+    click-cycle: "&7点击切换"
+    skin: "&b皮肤  &f{skin}"
+    skin-lore: ["&7点击切换皮肤"]
+    apply: "&a启用匿名身份"
+    apply-lore: ["&7在所有支持的子服同步生效"]
+    disable: "&c关闭匿名身份"
+    disable-lore: ["&7恢复真实昵称、称号与皮肤"]
+    close: "&7关闭"
+
+rewards:
+  service-unavailable: "&c奖励服务暂不可用"
+  loading: "&e奖励状态正在加载…"
+  processing: "&e正在领取奖励…"
+  unavailable: "&c该奖励尚未开放领取"
+  no-permission: "&c当前会员等级不能领取该奖励"
+  provider-unavailable: "&c奖励发放服务暂不可用"
+  failed: "&c奖励领取失败，请稍后重试"
+  completed: "&a奖励领取成功"
+  already-claimed: "&e本期奖励已经领取"
+  available-now: "&a现在可以领取"
+  available-in: "&7可领取时间  &e{time}"
+  click: "&a点击领取"
+  claimed: "&7已经领取"
+  menu:
+    title: "&8礼包使者"
+    profile-lore: ["&7每日与每月奖励在全服共享"]
+    close: "&c关闭"
+    daily:
+      name: "&a&lCCTStudio &7每日奖励"
+      lore: ["&8+ &b10 &7神秘之尘"]
+    free:
+      name: "&7每月神秘宝库奖励"
+      lore: ["&8+ &a1 &7随机品质神秘宝库"]
+    vip:
+      name: "&7每月&a[VIP]&7神秘宝库奖励"
+      lore: ["&8+ &a5 &7随机品质神秘宝库", "&8需要 &a[VIP]"]
+    vipp:
+      name: "&7每月&a[VIP&e+&a]&7神秘宝库奖励"
+      lore: ["&8+ &a5 &7随机品质神秘宝库", "&8需要 &a[VIP&e+&a]"]
+    mvp:
+      name: "&7每月&b[MVP]&7神秘宝库奖励"
+      lore: ["&8+ &a5 &7随机品质神秘宝库", "&8需要 &b[MVP]"]
+    mvpp:
+      name: "&7每月&6[MVP&e+&6]&7神秘宝库奖励"
+      lore: ["&8+ &a5 &7随机品质神秘宝库", "&8需要 &6[MVP&e+&6]"]
+
+lobby:
+  connecting: "&a正在返回大厅…"
+  already-there: "&e你已经在大厅"
+  failed: "&c暂时无法连接大厅"
+
+menus:
+  personal:
+    title: "&8个人中心"
+    membership-name: "&b会员中心"
+    membership-lore: ["&7查看等级与价格"]
+    exchange-name: "&a金币兑换"
+    exchange-lore: ["&7兑换服务器金币"]
+    redeem-name: "&6兑换码"
+    redeem-lore: ["&7输入 /cct redeem <兑换码>"]
+    redeem-hint: "&e请在聊天栏输入 /cct redeem <兑换码>"
+    close-name: "&c关闭"
+  membership:
+    title: "&8会员中心"
+    data-loading: "&e会员数据正在加载"
+    load-failed: "&c会员数据加载失败，请稍后重试"
+    price-loading: "&e价格加载中…"
+    duration: "&7时长  &f{days} 天"
+    promotion-left: "&7折扣剩余  &a{time}"
+    state-paused: "&7状态  &c已暂停"
+    state-active: "&7状态  &a生效中"
+    remaining: "&7剩余  &b{time}"
+    renew: "&a点击续费 30 天"
+    upgrade: "&a点击升级"
+    purchase: "&a点击购买 30 天"
+    benefits-suffix: "&7 特权"
+    benefit-line: "&7• {benefit}"
+    benefit-includes-prefix: "&7• 包含 "
+    benefit-includes-suffix: "&7 的全部特权"
+    no-benefits: "&7暂无特权说明"
+    back-name: "&7返回"
+  account:
+    title-label: "&7称号  "
+    points: "&7点券  &6{value}"
+    membership: "&7会员  &b{value}"
+    expiry: "&7到期  &f{value}"
+    remaining: "&7剩余  &a{value}"
+    permission: "&7权限  {value}"
+    loading: "加载中…"
+    no-membership: "暂无会员"
+    sync-applied: "&a已同步"
+    sync-pending: "&e同步中"
+  exchange:
+    title: "&8金币兑换"
+    data-loading: "&e兑换数据正在加载…"
+    load-failed: "&c兑换数据加载失败，请稍后重试"
+    points: "&7点券  &6{value}"
+    currency: "&7{currency}  &e{value}"
+    weekly: "&7本周  &b{used} / {limit}"
+    remaining: "&7剩余  &a{value}"
+    reset: "&7重置  &f{value}"
+    button: "&a兑换 {points} 点券"
+    button-disabled: "&7兑换 {points} 点券"
+    need: "&7需要  &e{cost} {currency}"
+    after: "&7兑换后  &f{value}"
+    weekly-after: "&7本周剩余  &b{value}"
+    click: "&a点击兑换"
+    close-name: "&c关闭"
+    processing: "&e正在兑换…"
+    operation-processing: "&e操作处理中"
+    unavailable-server: "&7当前服务器未开放兑换"
+    unavailable: "&c兑换暂不可用"
+    invalid-amount: "&7仅支持 1、10、100 或 max"
+    usage: "&7使用 /cct exchange [1|10|100|max]"
+    completed: "&a已兑换 {points} 点券"
+    review-required: "&c交易待核对，请联系管理员"
+    incomplete: "&c兑换未完成"
+    insufficient-currency: "&c金币不足"
+    insufficient-limit: "&c本周额度不足"
+  upgrade:
+    title: "&8选择升级方式"
+    pause-name: "&b暂停旧会员"
+    pause-lore: ["&7新会员到期后自动恢复"]
+    credit-name: "&a折价升级"
+    credit-lore: ["&7剩余时间抵扣本次价格"]
+    back-name: "&7返回"
+  confirmation:
+    title: "&8确认购买"
+    loading-name: "&e价格加载中…"
+    loading-lore: ["&7请稍候"]
+    confirm-name: "&a确认购买"
+    confirm-lore: "&a点击确认"
+    credit: "&7折价  &b-{points}"
+    duration: "&7时长  &f{days} 天"
+    back-name: "&7返回"
+    processing: "&e正在处理"
+    completed: "&a会员已生效，到期 {expiry}"
+    compensated: "&e购买未完成，点券已退回"
+    review-required: "&e订单处理中，请联系管理员"
+    service-unavailable: "&c会员服务暂不可用"
+  price:
+    label: "&7价格  "
+    base: "&7{price} 点券"
+    regular: "&7价格  &6{price} 点券"
+    discounted: "  &a{price} 点券"
+  errors:
+    downgrade: "当前会员等级更高，只能续费或升级"
+    upgrade-mode-required: "请选择升级方式"
+    duration-limit: "购买后的到期时间不能超过 365 天"
+    forbidden: "当前权限组不可购买会员"
+    stale-quote: "价格已变化，请重新确认"
+    tier-unavailable: "该会员等级暂不可用"
+    insufficient-points: "点券不足"
+    operation-processing: "已有订单正在处理"
+    incomplete: "购买未完成"
+
+admin:
+  default-redeem-note: "管理员生成"
+  default-promotion-note: "管理员活动"
+  promotion-service-unavailable: "&c折扣服务仅在业务节点可用"
+  membership-service-unavailable: "&c会员服务仅在业务节点可用"
+  redeem-service-unavailable: "&c兑换码服务仅在业务节点可用"
+  player-not-found: "&c未找到该玩家"
+  member-operation-failed: "&c会员操作失败"
+  member-none: "&f{player} &7暂无生效会员"
+  member-active: "&f{player} &a{tier} &7到期 {expiry}"
+  member-paused: "&7已暂停 {count} 项"
+  member-syncing: "&eLuckPerms 权限同步中"
+  redeem-generate-failed: "&c生成兑换码失败"
+  redeem-generated: "&a已生成 {count} 个兑换码"
+  redeem-code: "&f{code}"
+  redeem-save-now: "&7兑换码仅在这里显示一次，请立即保存"
+  promotion-create-failed: "&c创建折扣失败，请检查等级与时间"
+  promotion-created: "&a折扣已开启 &7{id} &f减{percent}% &7至 {expiry}"
+  promotion-stop-failed: "&c停止折扣失败"
+  promotion-stopped: "&a折扣已停止"
+  promotion-not-active: "&e折扣不存在或已经停止"
+  promotion-list-failed: "&c读取折扣失败"
+  promotion-list-empty: "&7当前没有折扣"
+  promotion-list-line: "&f{id} &a减{percent}% &7{target} → {expiry}"
+  promotion-not-found: "&c未找到折扣"
+  promotion-info-id: "&f{id}"
+  promotion-info-summary: "&7范围 &f{target} &7折扣 &a减{percent}%"
+  promotion-info-state: "&7结束 &f{expiry} &7状态 &f{status}"
+  all-tiers: "全部等级"
+
+time:
+  days-hours: "{days}天 {hours}小时"
+  hours-minutes: "{hours}小时 {minutes}分"
+  minutes: "{minutes}分"
+  remaining-days-hours: "{days} 天 {hours} 小时"
+  remaining-hours: "{hours} 小时"

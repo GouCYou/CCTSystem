@@ -1,0 +1,57 @@
+rows: 6
+title-key: menus.membership.title
+
+fill:
+  enabled: false
+  material: AIR
+  slots: []
+
+items:
+  profile:
+    slot: 4
+    material: PLAYER_HEAD
+    action: PROFILE
+  vip:
+    slot: 19
+    material: AUTO
+    action: PURCHASE_MEMBERSHIP
+    value: vip
+  vip_plus:
+    slot: 21
+    material: AUTO
+    action: PURCHASE_MEMBERSHIP
+    value: vip_plus
+  mvp:
+    slot: 23
+    material: AUTO
+    action: PURCHASE_MEMBERSHIP
+    value: mvp
+  mvp_plus:
+    slot: 25
+    material: AUTO
+    action: PURCHASE_MEMBERSHIP
+    value: mvp_plus
+  vip_benefits:
+    slot: 28
+    material: BOOK
+    action: VIEW_BENEFITS
+    value: vip
+  vip_plus_benefits:
+    slot: 30
+    material: BOOK
+    action: VIEW_BENEFITS
+    value: vip_plus
+  mvp_benefits:
+    slot: 32
+    material: BOOK
+    action: VIEW_BENEFITS
+    value: mvp
+  mvp_plus_benefits:
+    slot: 34
+    material: BOOK
+    action: VIEW_BENEFITS
+    value: mvp_plus
+  back:
+    slot: 45
+    material: ARROW
+    action: OPEN_PERSONAL

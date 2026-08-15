@@ -1,0 +1,95 @@
+# Keeps permission-based benefits aligned with the public Rank table.
+enabled: true
+apply-on-server-ids: [lobby, survival, creative]
+
+groups:
+  default:
+    add-permissions:
+      - cmi.command.sethome.3
+      - plots.plot.1
+      - residence.group.default
+      - MyPet.petstorage.limit.1
+    remove-permissions:
+      - MyPet.petstorage.limit.2
+  vip:
+    add-permissions:
+      - cctsystem.reward.vip
+      - quickshop.limit.vip
+      - pvpmanager.pvpstatus.change
+      - pvpmanager.command.pvp
+      - cmi.command.sethome.4
+      - cmi.command.enderchest
+      - deluxehub.command.fly
+      - hub.fly
+      - gadgetsmenu.mysteryboxes.open.4
+      - jobs.boost.all.money.0.2
+      - plots.plot.2
+      - residence.group.vip
+      - MyPet.petstorage.limit.2
+      - MyPet.experience.multiplier.150
+    remove-permissions:
+      - cmi.command.sethome.5
+      - MyPet.petstorage.limit.3
+  vipp:
+    add-permissions:
+      - cctsystem.reward.vipp
+      - quickshop.limit.vipp
+      - cctsystem.shout
+      - cmi.command.sethome.5
+      - cmi.command.anvil
+      - battlepass.premium
+      - cct.flight.menu
+      - cct.flight.limited
+      - cct.flight.vipp
+      - jobs.boost.all.money.0.5
+      - plots.plot.3
+      - residence.group.vipp
+      - MyPet.petstorage.limit.3
+      - MyPet.experience.multiplier.200
+    remove-permissions:
+      - cmi.command.sethome.6
+      - MyPet.petstorage.limit.4
+      - MyPet.experience.multiplier.175
+      - MyPet.command.name.color
+  mvp:
+    add-permissions:
+      - cctsystem.reward.mvp
+      - quickshop.limit.mvp
+      - cmi.command.sethome.6
+      - gadgetsmenu.mysteryboxes.open.5
+      - cct.flight.menu
+      - cct.flight.limited
+      - cct.flight.mvp
+      - jobs.boost.all.money.0.8
+      - plots.plot.4
+      - residence.group.mvp
+      - MyPet.petstorage.limit.4
+      - MyPet.experience.multiplier.250
+    remove-permissions:
+      - cmi.command.sethome.7
+      - MyPet.petstorage.limit.5
+      - MyPet.experience.multiplier.200
+  mvpp:
+    add-permissions:
+      - cctsystem.reward.mvpp
+      - quickshop.limit.mvpp
+      - cctsystem.nick
+      - cmi.command.sethome.7
+      - cmi.command.fly
+      - cct.flight.menu
+      - cct.flight.unlimited
+      - gadgetsmenu.ridepet
+      - gadgetsmenu.commands.namepet
+      - jobs.boost.all.money.1.0
+      - plots.plot.5
+      - residence.group.mvpp
+      - MyPet.petstorage.limit.5
+      - MyPet.experience.multiplier.300
+      - MyPet.command.name.color
+    remove-permissions:
+      - cmi.command.sethome.8
+      - MyPet.petstorage.limit.6
+  admin:
+    add-permissions:
+      - cctsystem.vanish
+    remove-permissions: []

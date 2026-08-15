@@ -7,10 +7,13 @@ import cn.cctstudio.cctsystem.points.PointsService;
 import cn.cctstudio.cctsystem.promotion.PromotionService;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -20,21 +23,30 @@ final class JdbcMembershipService implements MembershipService {
     private final JdbcMembershipStore store;
     private final PointsService points;
     private final PromotionService promotions;
+    private final MembershipAccessGateway accessGateway;
     private final Clock clock;
     private final int quoteTtlSeconds;
+    private final int maxPurchaseDays;
+    private final Set<String> purchaseBlockedGroups;
 
     JdbcMembershipService(
         JdbcMembershipStore store,
         PointsService points,
         PromotionService promotions,
+        MembershipAccessGateway accessGateway,
         Clock clock,
-        int quoteTtlSeconds
+        int quoteTtlSeconds,
+        int maxPurchaseDays,
+        Set<String> purchaseBlockedGroups
     ) {
         this.store = store;
         this.points = points;
         this.promotions = promotions;
+        this.accessGateway = accessGateway;
         this.clock = clock;
         this.quoteTtlSeconds = quoteTtlSeconds;
+        this.maxPurchaseDays = maxPurchaseDays;
+        this.purchaseBlockedGroups = Set.copyOf(purchaseBlockedGroups);
     }
 
     @Override
@@ -48,6 +60,45 @@ final class JdbcMembershipService implements MembershipService {
     }
 
     @Override
+    public CompletionStage<MembershipMenuSnapshot> menu(UUID playerUuid) {
+        Objects.requireNonNull(playerUuid, "playerUuid");
+        Instant now = clock.instant();
+        return context(playerUuid, now).thenCompose(context -> {
+            if (MembershipPurchasePolicy.isBlocked(context.access(), purchaseBlockedGroups)) {
+                return CompletableFuture.completedFuture(new MembershipMenuSnapshot(
+                    context.summary(),
+                    context.catalog().stream()
+                        .map(tier -> new MembershipMenuTier(
+                            tier, null, "MEMBERSHIP_PURCHASE_FORBIDDEN"
+                        ))
+                        .toList()
+                ));
+            }
+            List<CompletableFuture<MembershipMenuTier>> tiers = new ArrayList<>();
+            for (MembershipTier tier : context.catalog()) {
+                UpgradeMode mode = context.summary().active() != null
+                    && tier.priority() > context.summary().active().tier().priority()
+                    ? UpgradeMode.PAUSE
+                    : UpgradeMode.NONE;
+                tiers.add(promotions.activeForMembership(tier.key(), now)
+                    .thenApply(promotion -> new MembershipMenuTier(
+                        tier,
+                        quote(context, tier, 1, mode, promotion, now),
+                        null
+                    ))
+                    .exceptionally(failure -> new MembershipMenuTier(
+                        tier, null, errorCode(failure)
+                    ))
+                    .toCompletableFuture());
+            }
+            return CompletableFuture.allOf(tiers.toArray(CompletableFuture[]::new))
+                .thenApply(ignored -> new MembershipMenuSnapshot(
+                    context.summary(), tiers.stream().map(CompletableFuture::join).toList()
+                ));
+        });
+    }
+
+    @Override
     public CompletionStage<MembershipQuote> quote(
         UUID playerUuid,
         String tierKey,
@@ -58,10 +109,9 @@ final class JdbcMembershipService implements MembershipService {
         String normalizedTier = normalizeTier(tierKey);
         UpgradeMode mode = Objects.requireNonNullElse(upgradeMode, UpgradeMode.NONE);
         Instant now = clock.instant();
-        CompletionStage<MembershipSummary> summary = store.reconcileAndSummary(playerUuid, now);
-        CompletionStage<List<MembershipTier>> catalog = store.catalog();
-        return summary.thenCombine(catalog, QuoteContext::new)
+        return context(playerUuid, now)
             .thenCompose(context -> {
+                MembershipPurchasePolicy.ensureAccess(context.access(), purchaseBlockedGroups);
                 MembershipTier target = context.catalog().stream()
                     .filter(tier -> tier.key().equals(normalizedTier) && tier.enabled())
                     .findFirst()
@@ -69,16 +119,7 @@ final class JdbcMembershipService implements MembershipService {
                         "MEMBERSHIP_TIER_UNAVAILABLE", "Membership tier is unavailable", false
                     ));
                 return promotions.activeForMembership(normalizedTier, now)
-                    .thenApply(promotion -> MembershipPricing.quote(
-                        target,
-                        months,
-                        mode,
-                        context.summary().active(),
-                        highestPriority(context.summary()),
-                        promotion,
-                        now,
-                        quoteTtlSeconds
-                    ));
+                    .thenApply(promotion -> quote(context, target, months, mode, promotion, now));
             });
     }
 
@@ -119,19 +160,115 @@ final class JdbcMembershipService implements MembershipService {
         if (request == null || request.action() == null || request.playerUuid() == null
             || request.actor() == null || request.actor().isBlank() || request.actor().length() > 80
             || request.reason() == null || request.reason().isBlank() || request.reason().length() > 255
-            || request.days() < 0 || request.days() > 3650) {
+            || request.days() < 0 || request.days() > maxPurchaseDays) {
             throw new MembershipException("MEMBERSHIP_ADMIN_REQUEST_INVALID", "Invalid admin request", false);
         }
-        if (request.action() == AdminMembershipAction.GRANT) {
+        if (request.action() == AdminMembershipAction.GRANT
+            || request.action() == AdminMembershipAction.EXTEND
+            || request.action() == AdminMembershipAction.RECLAIM
+            || request.action() == AdminMembershipAction.REMOVE) {
             normalizeTier(request.tierKey());
+        }
+        if (request.action() == AdminMembershipAction.GRANT) {
             if (request.days() < 1) {
                 throw new MembershipException("MEMBERSHIP_ADMIN_REQUEST_INVALID", "Grant days are required", false);
             }
         }
+        if (request.action() == AdminMembershipAction.EXTEND && request.days() < 1) {
+            throw new MembershipException(
+                "MEMBERSHIP_ADMIN_REQUEST_INVALID", "Extension days are required", false
+            );
+        }
         if (request.action() == AdminMembershipAction.SET_EXPIRY && request.expiresAt() == null) {
             throw new MembershipException("MEMBERSHIP_ADMIN_REQUEST_INVALID", "Expiry is required", false);
         }
-        return store.admin(request, clock.instant());
+        Instant now = clock.instant();
+        if (request.action() == AdminMembershipAction.SET_EXPIRY
+            && request.expiresAt().isAfter(now.plus(Duration.ofDays(maxPurchaseDays)))) {
+            throw durationLimit();
+        }
+        if (request.action() != AdminMembershipAction.EXTEND
+            && request.action() != AdminMembershipAction.GRANT) {
+            return store.admin(request, now);
+        }
+        return summary(request.playerUuid()).thenCompose(summary -> {
+            MembershipEntitlement entitlement = entitlement(summary, request.tierKey());
+            if (entitlement != null) {
+                if (entitlement.state() == EntitlementState.PAUSED) {
+                    long current = Math.max(0L, entitlement.remainingSeconds());
+                    if (current + Duration.ofDays(request.days()).toSeconds()
+                        > Duration.ofDays(maxPurchaseDays).toSeconds()) {
+                        throw durationLimit();
+                    }
+                } else {
+                    Instant base = entitlement.expiresAt() == null
+                        || entitlement.expiresAt().isBefore(now) ? now : entitlement.expiresAt();
+                    if (base.plus(Duration.ofDays(request.days()))
+                        .isAfter(now.plus(Duration.ofDays(maxPurchaseDays)))) {
+                        throw durationLimit();
+                    }
+                }
+            }
+            return store.admin(request, now);
+        });
+    }
+
+    private static MembershipEntitlement entitlement(MembershipSummary summary, String tierKey) {
+        if (summary.active() != null && summary.active().tier().key().equals(tierKey)) {
+            return summary.active();
+        }
+        return summary.paused().stream()
+            .filter(item -> item.tier().key().equals(tierKey))
+            .findFirst()
+            .orElse(null);
+    }
+
+    private CompletionStage<QuoteContext> context(UUID playerUuid, Instant now) {
+        CompletionStage<MembershipSummary> summary = store.reconcileAndSummary(playerUuid, now);
+        CompletionStage<List<MembershipTier>> catalog = store.catalog();
+        CompletionStage<MembershipAccess> access = accessGateway.access(playerUuid);
+        return summary.thenCombine(catalog, SummaryCatalog::new)
+            .thenCombine(access, (data, membershipAccess) -> new QuoteContext(
+                data.summary(), data.catalog(), membershipAccess
+            ));
+    }
+
+    private MembershipQuote quote(
+        QuoteContext context,
+        MembershipTier target,
+        int months,
+        UpgradeMode mode,
+        cn.cctstudio.cctsystem.promotion.Promotion promotion,
+        Instant now
+    ) {
+        MembershipPurchasePolicy.ensureDuration(
+            context.summary(), target, months, now, maxPurchaseDays
+        );
+        return MembershipPricing.quote(
+            target,
+            months,
+            mode,
+            context.summary().active(),
+            highestPriority(context.summary()),
+            promotion,
+            now,
+            quoteTtlSeconds
+        );
+    }
+
+    private static MembershipException durationLimit() {
+        return new MembershipException(
+            "MEMBERSHIP_DURATION_LIMIT",
+            "Membership validity cannot exceed the configured limit",
+            false
+        );
+    }
+
+    private static String errorCode(Throwable failure) {
+        Throwable cause = unwrap(failure);
+        return cause instanceof MembershipException membership
+            ? membership.code()
+            : "MEMBERSHIP_TIER_UNAVAILABLE";
     }
 
     private CompletionStage<MembershipOrderResult> debitAndApply(PreparedMembershipOrder prepared) {
@@ -316,6 +453,13 @@ final class JdbcMembershipService implements MembershipService {
         return current;
     }
 
-    private record QuoteContext(MembershipSummary summary, List<MembershipTier> catalog) {
+    private record SummaryCatalog(MembershipSummary summary, List<MembershipTier> catalog) {
+    }
+
+    private record QuoteContext(
+        MembershipSummary summary,
+        List<MembershipTier> catalog,
+        MembershipAccess access
+    ) {
     }
 }

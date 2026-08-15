@@ -23,6 +23,7 @@ import java.util.concurrent.CompletionStage;
 public final class MembershipRpcModule implements CctModule {
     public static final String CATALOG_OPERATION = "membership.catalog";
     public static final String SUMMARY_OPERATION = "membership.summary";
+    public static final String MENU_OPERATION = "membership.menu";
     public static final String QUOTE_OPERATION = "membership.quote";
     public static final String PURCHASE_OPERATION = "membership.purchase";
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -49,6 +50,9 @@ public final class MembershipRpcModule implements CctModule {
         ));
         router.register(SUMMARY_OPERATION, payload -> mapErrors(
             service.summary(requireUuid(payload)).thenApply(MembershipRpcModule::summaryJson)
+        ));
+        router.register(MENU_OPERATION, payload -> mapErrors(
+            service.menu(requireUuid(payload)).thenApply(MembershipRpcModule::menuJson)
         ));
         router.register(QUOTE_OPERATION, payload -> mapErrors(quote(payload, service)));
         router.registerCall(PURCHASE_OPERATION, call -> mapErrors(purchase(call, service)));
@@ -95,11 +99,15 @@ public final class MembershipRpcModule implements CctModule {
         result.put("key", tier.key());
         result.put("displayName", tier.displayName());
         result.put("priority", tier.priority());
+        result.put("luckPermsGroup", tier.luckPermsGroup());
         result.put("durationDays", tier.durationDays());
         result.put("pricePoints", tier.pricePoints());
+        result.put("upgradeCreditRateBps", tier.upgradeCreditRateBps());
         result.put("displayMaterial", tier.displayMaterial());
         ArrayNode benefits = result.putArray("benefits");
         tier.benefits().forEach(benefits::add);
+        result.put("enabled", tier.enabled());
+        result.put("version", tier.version());
         return result;
     }
 
@@ -113,11 +121,30 @@ public final class MembershipRpcModule implements CctModule {
         return result;
     }
 
+    private static ObjectNode menuJson(MembershipMenuSnapshot snapshot) {
+        ObjectNode result = JSON.createObjectNode();
+        result.set("summary", summaryJson(snapshot.summary()));
+        ArrayNode tiers = result.putArray("tiers");
+        snapshot.tiers().forEach(view -> {
+            ObjectNode item = tiers.addObject();
+            item.set("tier", tierJson(view.tier()));
+            item.set("quote", view.quote() == null ? JSON.nullNode() : quoteJson(view.quote()));
+            if (view.unavailableCode() == null) {
+                item.putNull("unavailableCode");
+            } else {
+                item.put("unavailableCode", view.unavailableCode());
+            }
+        });
+        return result;
+    }
+
     private static JsonNode entitlementJson(MembershipEntitlement entitlement) {
         if (entitlement == null) {
             return JSON.nullNode();
         }
         ObjectNode result = JSON.createObjectNode();
+        result.put("entitlementId", entitlement.entitlementId().toString());
+        result.set("tier", tierJson(entitlement.tier()));
         result.put("tierKey", entitlement.tier().key());
         result.put("displayName", entitlement.tier().displayName());
         result.put("state", entitlement.state().name());
@@ -128,11 +155,17 @@ public final class MembershipRpcModule implements CctModule {
         } else {
             result.put("remainingSeconds", entitlement.remainingSeconds());
         }
+        if (entitlement.resumeSequence() == null) {
+            result.putNull("resumeSequence");
+        } else {
+            result.put("resumeSequence", entitlement.resumeSequence());
+        }
         return result;
     }
 
     private static ObjectNode quoteJson(MembershipQuote quote) {
         ObjectNode result = JSON.createObjectNode();
+        result.put("quoteId", quote.quoteId().toString());
         result.set("tier", tierJson(quote.targetTier()));
         result.put("months", quote.months());
         result.put("upgradeMode", quote.upgradeMode().name());
@@ -144,6 +177,7 @@ public final class MembershipRpcModule implements CctModule {
         result.put("finalPricePoints", quote.finalPricePoints());
         result.set("current", entitlementJson(quote.currentEntitlement()));
         result.put("validUntil", quote.validUntil().toString());
+        result.put("quotedAt", quote.quotedAt().toString());
         return result;
     }
 
@@ -154,6 +188,11 @@ public final class MembershipRpcModule implements CctModule {
         result.put("tierKey", order.tierKey());
         result.put("months", order.months());
         result.put("finalPricePoints", order.finalPricePoints());
+        if (order.entitlementId() == null) {
+            result.putNull("entitlementId");
+        } else {
+            result.put("entitlementId", order.entitlementId().toString());
+        }
         putInstant(result, "expiresAt", order.expiresAt());
         result.put("permissionSyncStatus", order.permissionSyncStatus());
         if (order.errorCode() == null) {

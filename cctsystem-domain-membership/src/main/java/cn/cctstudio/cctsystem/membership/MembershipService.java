@@ -9,6 +9,14 @@ public interface MembershipService {
 
     CompletionStage<MembershipSummary> summary(UUID playerUuid);
 
+    default CompletionStage<MembershipMenuSnapshot> menu(UUID playerUuid) {
+        return java.util.concurrent.CompletableFuture.failedFuture(new MembershipException(
+            "MEMBERSHIP_MENU_UNAVAILABLE",
+            "Membership menu snapshot is unavailable",
+            true
+        ));
+    }
+
     CompletionStage<MembershipQuote> quote(
         UUID playerUuid,
         String tierKey,

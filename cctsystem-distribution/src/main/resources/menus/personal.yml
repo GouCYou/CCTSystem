@@ -1,0 +1,29 @@
+rows: 3
+title-key: menus.personal.title
+
+fill:
+  enabled: false
+  material: AIR
+  slots: []
+
+items:
+  profile:
+    slot: 4
+    material: PLAYER_HEAD
+    action: PROFILE
+  membership:
+    slot: 11
+    material: NETHER_STAR
+    action: OPEN_MEMBERSHIP
+  exchange:
+    slot: 13
+    material: EMERALD
+    action: OPEN_EXCHANGE
+  redeem:
+    slot: 15
+    material: NAME_TAG
+    action: REDEEM_HINT
+  close:
+    slot: 22
+    material: BARRIER
+    action: CLOSE

@@ -16,6 +16,7 @@ allprojects {
         maven("https://repo.papermc.io/repository/maven-public/")
         maven("https://repo.codemc.org/repository/maven-public/")
         maven("https://repo.rosewooddev.io/repository/public/")
+        maven("https://repo.helpch.at/releases/")
         maven("https://jitpack.io")
     }
 }

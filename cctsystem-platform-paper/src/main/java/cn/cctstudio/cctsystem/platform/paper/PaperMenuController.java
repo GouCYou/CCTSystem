@@ -21,28 +21,50 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
     private final ProviderRegistry providers;
     private final PlatformTaskExecutor platformTasks;
     private final CctLogger logger;
+    private final PaperMessages messages;
+    private final PaperNetworkChat networkChat;
 
     PaperMenuController(
         PaperMembershipMenu memberships,
         PaperExchangeMenu exchange,
         ProviderRegistry providers,
         PlatformTaskExecutor platformTasks,
-        CctLogger logger
+        CctLogger logger,
+        PaperMessages messages,
+        PaperNetworkChat networkChat
     ) {
         this.memberships = memberships;
         this.exchange = exchange;
         this.providers = providers;
         this.platformTasks = platformTasks;
         this.logger = logger;
+        this.messages = messages;
+        this.networkChat = networkChat;
     }
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] arguments) {
         if (!(sender instanceof Player player)) {
-            sender.sendMessage("该命令只能由玩家使用");
+            sender.sendMessage(messages.component("commands.only-player"));
             return true;
         }
-        if (arguments.length == 0 || arguments[0].equalsIgnoreCase("me")) {
+        if (command.getName().equalsIgnoreCase("shout")) {
+            if (arguments.length == 0) {
+                player.sendMessage(messages.component("chat.shout-usage"));
+            } else {
+                networkChat.shout(player, String.join(" ", arguments));
+            }
+            return true;
+        }
+        if (arguments.length == 0) {
+            memberships.openPersonal(player);
+            return true;
+        }
+        if (arguments[0].equalsIgnoreCase("help")) {
+            messages.components("commands.player-help").forEach(player::sendMessage);
+            return true;
+        }
+        if (arguments[0].equalsIgnoreCase("me")) {
             memberships.openPersonal(player);
             return true;
         }
@@ -56,19 +78,29 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
             } else if (arguments.length == 2) {
                 exchange.executeCommand(player, arguments[1]);
             } else {
-                player.sendMessage("§7使用 /cct exchange [1|10|100|max]");
+                player.sendMessage(messages.component("menus.exchange.usage"));
             }
             return true;
         }
         if (arguments[0].equalsIgnoreCase("redeem")) {
             if (arguments.length != 2) {
-                player.sendMessage("§7使用 /cct redeem <兑换码>");
+                player.sendMessage(messages.component("redeem.usage"));
             } else {
                 redeem(player, arguments[1]);
             }
             return true;
         }
-        player.sendMessage("§7使用 /cct [me|vip|exchange|redeem]");
+        if (arguments[0].equalsIgnoreCase("shout")) {
+            if (arguments.length < 2) {
+                player.sendMessage(messages.component("chat.shout-usage"));
+            } else {
+                networkChat.shout(player, String.join(" ", java.util.Arrays.copyOfRange(
+                    arguments, 1, arguments.length
+                )));
+            }
+            return true;
+        }
+        messages.components("commands.player-help").forEach(player::sendMessage);
         return true;
     }
 
@@ -80,7 +112,7 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
         String[] arguments
     ) {
         if (arguments.length == 1) {
-            return List.of("me", "vip", "exchange", "redeem");
+            return List.of("help", "me", "vip", "exchange", "redeem", "shout");
         }
         if (arguments.length == 2 && arguments[0].equalsIgnoreCase("exchange")) {
             return List.of("1", "10", "100", "max");
@@ -91,10 +123,10 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
     private void redeem(Player player, String code) {
         RedeemCodeService service = providers.find(RedeemCodeServiceProvider.KEY).orElse(null);
         if (service == null) {
-            player.sendMessage("§c兑换码服务暂不可用");
+            player.sendMessage(messages.component("redeem.service-unavailable"));
             return;
         }
-        player.sendMessage("§7正在兑换…");
+        player.sendMessage(messages.component("redeem.processing"));
         service.redeem(new RedeemRequest(
             player.getUniqueId(), code, "game:" + UUID.randomUUID(), "GAME_COMMAND"
         )).whenComplete((result, failure) -> platformTasks.callMain(() -> {
@@ -103,7 +135,7 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
             }
             if (failure != null) {
                 logger.warn("Redeem command failed", failure);
-                player.sendMessage("§c兑换失败，请检查兑换码");
+                player.sendMessage(messages.component("redeem.failed"));
             } else {
                 showResult(player, result);
             }
@@ -111,14 +143,16 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
         }));
     }
 
-    private static void showResult(Player player, RedeemResult result) {
+    private void showResult(Player player, RedeemResult result) {
         if ("COMPLETED".equals(result.status())) {
-            player.sendMessage("§a兑换成功");
-            result.rewards().forEach(reward -> player.sendMessage("§7获得 §f" + reward.description()));
+            player.sendMessage(messages.component("redeem.completed"));
+            result.rewards().forEach(reward -> player.sendMessage(messages.component(
+                "redeem.reward", java.util.Map.of("reward", reward.description())
+            )));
         } else if ("REVIEW_REQUIRED".equals(result.status())) {
-            player.sendMessage("§e兑换处理中，请勿重复提交");
+            player.sendMessage(messages.component("redeem.review-required"));
         } else {
-            player.sendMessage("§c兑换未完成");
+            player.sendMessage(messages.component("redeem.incomplete"));
         }
     }
 }

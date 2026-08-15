@@ -38,6 +38,8 @@ exchange:
 
 membership:
   quote-ttl-seconds: 60
+  max-purchase-days: 365
+  purchase-blocked-groups: [helper, mod, admin, owner]
   tiers:
     - key: vip
       display-name: VIP
@@ -47,17 +49,17 @@ membership:
       price-points: 100
       upgrade-credit-rate-bps: 10000
       display-material: GOLD_INGOT
-      benefits: [基础飞行特权, 专属称号]
+      benefits: [专属称号, 专属每日礼包 + 一次性礼包, 可开启 4 星神秘箱, 箱子商店数量 15 个, 1.2 倍金钱获取, 5 个领地，最大 300×300, 创造服 2 个地皮, 2 只宠物，1.5 倍升级, 切换 PVP 状态, 远程末影箱, 大厅飞行]
       enabled: true
     - key: vip_plus
       display-name: VIP+
       priority: 200
-      luck-perms-group: vip+
+      luck-perms-group: vipp
       duration-days: 30
       price-points: 200
       upgrade-credit-rate-bps: 10000
       display-material: DIAMOND
-      benefits: [进阶飞行特权, 专属称号]
+      benefits: [包含VIP全部权益, 箱子商店数量 20 个, 1.5 倍金钱获取, 8 个领地，最大 400×400, 创造服 3 个地皮, 3 只宠物，2.0 倍升级, 解锁高级战令, 远程铁砧, 支持跨服喊话, 每日飞行消耗 500 点]
       enabled: true
     - key: mvp
       display-name: MVP
@@ -67,17 +69,17 @@ membership:
       price-points: 400
       upgrade-credit-rate-bps: 10000
       display-material: EMERALD
-      benefits: [高级服务器特权, 专属称号]
+      benefits: [包含VIP+全部权益, 可开启 5 星神秘箱, 箱子商店数量 25 个, 1.8 倍金钱获取, 12 个领地，最大 600×600, 创造服 4 个地皮, 4 只宠物，2.5 倍升级, 高级生物捕捉, 每日飞行消耗 2000 点]
       enabled: true
     - key: mvp_plus
       display-name: MVP+
       priority: 400
-      luck-perms-group: mvp+
+      luck-perms-group: mvpp
       duration-days: 30
       price-points: 800
       upgrade-credit-rate-bps: 10000
       display-material: NETHER_STAR
-      benefits: [完整会员特权, 专属称号]
+      benefits: [包含MVP全部权益, 箱子商店数量 30 个, 2.0 倍金钱获取, 20 个领地，最大 1000×1000, 创造服 5 个地皮, 5 只宠物，3.0 倍升级, 最大范围生物捕捉, 无限飞行, 骑乘装饰宠物, 彩色宠物名, 匿名功能]
       enabled: true
 
 promotion:

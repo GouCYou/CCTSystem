@@ -1,0 +1,32 @@
+rows: 3
+title-key: menus.exchange.title
+
+fill:
+  enabled: false
+  material: AIR
+  slots: []
+
+items:
+  profile:
+    slot: 4
+    material: PLAYER_HEAD
+    action: PROFILE
+  exchange_1:
+    slot: 11
+    material: LIME_DYE
+    action: EXCHANGE
+    value: 1
+  exchange_10:
+    slot: 13
+    material: EMERALD
+    action: EXCHANGE
+    value: 10
+  exchange_100:
+    slot: 15
+    material: EMERALD_BLOCK
+    action: EXCHANGE
+    value: 100
+  close:
+    slot: 22
+    material: BARRIER
+    action: CLOSE

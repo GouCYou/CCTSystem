@@ -1,0 +1,46 @@
+rows: 3
+title-key: nickname.menu.title
+
+fill:
+  enabled: false
+  material: AIR
+  slots: []
+
+# 功能支持 RANDOM_NAME、CYCLE_RANK、CYCLE_SKIN、APPLY_NICK、DISABLE_NICK、CLOSE。
+items:
+  profile:
+    slot: 4
+    material: PLAYER_HEAD
+    action: PROFILE
+  name:
+    slot: 10
+    material: NAME_TAG
+    action: RANDOM_NAME
+  rank:
+    slot: 12
+    material: NETHER_STAR
+    action: CYCLE_RANK
+  skin:
+    slot: 14
+    material: PLAYER_HEAD
+    action: CYCLE_SKIN
+  apply:
+    slot: 16
+    material: EMERALD
+    action: APPLY_NICK
+  disable:
+    slot: 22
+    material: BARRIER
+    action: DISABLE_NICK
+  close:
+    slot: 18
+    material: ARROW
+    action: CLOSE
+
+settings:
+  max-name-changes-per-day: 6
+  name-prefixes: [Sky, Nova, Pixel, Craft, Frost, Lunar, Echo, River]
+  name-suffixes: [Fox, Wolf, Star, Cloud, Stone, Leaf, Spark, Knight]
+  rank-options: [default, vip, vipp, mvp, mvpp]
+  # RANDOM 会从这里选皮肤；REAL、Steve、Alex 是书本中的独立选项。
+  random-skins: [Notch, jeb_, Dinnerbone, Steve, Alex]

@@ -137,17 +137,27 @@ final class JdbcMembershipStore {
                 return inTransaction(connection, () -> {
                     lockState(connection, request.playerUuid());
                     reconcileLocked(connection, request.playerUuid(), now);
-                    MembershipEntitlement before = readActive(connection, request.playerUuid()).orElse(null);
+                    MembershipEntitlement active = readActive(connection, request.playerUuid()).orElse(null);
+                    MembershipEntitlement before = request.tierKey() == null
+                        ? active
+                        : readEntitlementByTier(
+                            connection, request.playerUuid(), request.tierKey()
+                        ).orElse(null);
                     switch (request.action()) {
-                        case GRANT -> adminGrant(connection, request, before, now);
+                        case GRANT -> adminGrant(connection, request, active, now);
                         case EXTEND -> adminExtend(connection, request, before, now);
-                        case REMOVE -> adminRemove(connection, request, before, now);
-                        case PAUSE -> adminPause(connection, request, before, now);
-                        case RESUME -> adminResume(connection, request, before, now);
-                        case SET_EXPIRY -> adminSetExpiry(connection, request, before, now);
+                        case RECLAIM, REMOVE -> adminReclaim(connection, request, before, now);
+                        case PAUSE -> adminPause(connection, request, active, now);
+                        case RESUME -> adminResume(connection, request, active, now);
+                        case SET_EXPIRY -> adminSetExpiry(connection, request, active, now);
                     }
                     MembershipSummary summary = readSummary(connection, request.playerUuid(), now);
-                    writeAdminEvent(connection, request, before, summary.active(), now);
+                    MembershipEntitlement after = request.tierKey() == null
+                        ? summary.active()
+                        : readEntitlementByTier(
+                            connection, request.playerUuid(), request.tierKey()
+                        ).orElse(null);
+                    writeAdminEvent(connection, request, before, after, now);
                     return summary;
                 });
             }
@@ -330,6 +340,40 @@ final class JdbcMembershipStore {
                     return null;
                 });
             }
+        });
+    }
+
+    CompletionStage<Void> reconcileExpired(Instant now, int limit) {
+        return async(() -> {
+            List<UUID> players = new ArrayList<>();
+            try (Connection connection = database.connection();
+                 PreparedStatement query = connection.prepareStatement("""
+                    SELECT s.player_uuid
+                    FROM cct_player_membership_state s
+                    JOIN cct_membership_entitlements e
+                      ON e.entitlement_id = s.active_entitlement_id
+                    WHERE e.state = 'ACTIVE' AND e.expires_at <= ?
+                    ORDER BY e.expires_at
+                    LIMIT ?
+                    """)) {
+                setInstant(query, 1, now);
+                query.setInt(2, limit);
+                try (ResultSet result = query.executeQuery()) {
+                    while (result.next()) {
+                        players.add(UuidBinary.decode(result.getBytes(1)));
+                    }
+                }
+            }
+            for (UUID playerUuid : players) {
+                try (Connection connection = database.connection()) {
+                    inTransaction(connection, () -> {
+                        lockState(connection, playerUuid);
+                        reconcileLocked(connection, playerUuid, now);
+                        return null;
+                    });
+                }
+            }
+            return null;
         });
     }
 
@@ -574,29 +618,46 @@ final class JdbcMembershipStore {
     private void adminExtend(
         Connection connection,
         AdminMembershipRequest request,
-        MembershipEntitlement active,
+        MembershipEntitlement entitlement,
         Instant now
     ) throws SQLException {
-        requireActive(active);
+        if (entitlement == null) {
+            throw new MembershipException(
+                "MEMBERSHIP_ENTITLEMENT_NOT_FOUND", "The selected rank has no remaining time", false
+            );
+        }
         if (request.days() < 1) {
             throw new MembershipException("MEMBERSHIP_ADMIN_REQUEST_INVALID", "Extension days are required", false);
         }
-        Instant base = active.expiresAt().isAfter(now) ? active.expiresAt() : now;
-        Instant expiry = base.plusSeconds(Math.multiplyExact((long) request.days(), 86_400L));
-        updateEntitlementExpiry(connection, active.entitlementId(), expiry);
+        long seconds = Math.multiplyExact((long) request.days(), 86_400L);
+        if (entitlement.state() == EntitlementState.PAUSED) {
+            updatePausedRemaining(
+                connection, entitlement.entitlementId(), entitlement.remainingSeconds() + seconds
+            );
+            return;
+        }
+        Instant base = entitlement.expiresAt().isAfter(now) ? entitlement.expiresAt() : now;
+        Instant expiry = base.plusSeconds(seconds);
+        updateEntitlementExpiry(connection, entitlement.entitlementId(), expiry);
         long version = incrementStateVersion(connection, request.playerUuid());
-        upsertProjection(connection, request.playerUuid(), active.tier(), expiry, version, now);
+        upsertProjection(connection, request.playerUuid(), entitlement.tier(), expiry, version, now);
     }
 
-    private void adminRemove(
+    private void adminReclaim(
         Connection connection,
         AdminMembershipRequest request,
-        MembershipEntitlement active,
+        MembershipEntitlement entitlement,
         Instant now
     ) throws SQLException {
-        requireActive(active);
-        setEntitlementState(connection, active.entitlementId(), "CANCELLED");
-        resumeNextOrClear(connection, request.playerUuid(), now);
+        if (entitlement == null) {
+            throw new MembershipException(
+                "MEMBERSHIP_ENTITLEMENT_NOT_FOUND", "The selected rank has no remaining time", false
+            );
+        }
+        setEntitlementState(connection, entitlement.entitlementId(), "CANCELLED");
+        if (entitlement.state() == EntitlementState.ACTIVE) {
+            resumeNextOrClear(connection, request.playerUuid(), now);
+        }
     }
 
     private void adminPause(
@@ -688,12 +749,27 @@ final class JdbcMembershipStore {
         }
     }
 
+    private static void updatePausedRemaining(
+        Connection connection,
+        UUID entitlementId,
+        long remainingSeconds
+    ) throws SQLException {
+        try (PreparedStatement update = connection.prepareStatement("""
+            UPDATE cct_membership_entitlements SET remaining_seconds = ?
+            WHERE entitlement_id = ? AND state = 'PAUSED'
+            """)) {
+            update.setLong(1, remainingSeconds);
+            update.setBytes(2, UuidBinary.encode(entitlementId));
+            requireOne(update.executeUpdate(), "Paused membership could not be extended");
+        }
+    }
+
     private static void setEntitlementState(Connection connection, UUID entitlementId, String state)
         throws SQLException {
         try (PreparedStatement update = connection.prepareStatement("""
             UPDATE cct_membership_entitlements
             SET state = ?, expires_at = NULL, remaining_seconds = NULL, resume_sequence = NULL
-            WHERE entitlement_id = ? AND state = 'ACTIVE'
+            WHERE entitlement_id = ? AND state IN ('ACTIVE', 'PAUSED')
             """)) {
             update.setString(1, state);
             update.setBytes(2, UuidBinary.encode(entitlementId));
@@ -837,6 +913,28 @@ final class JdbcMembershipStore {
             LIMIT 1
             """.formatted(ENTITLEMENT_COLUMNS))) {
             query.setBytes(1, UuidBinary.encode(playerUuid));
+            try (ResultSet result = query.executeQuery()) {
+                return result.next() ? Optional.of(mapEntitlement(result)) : Optional.empty();
+            }
+        }
+    }
+
+    private Optional<MembershipEntitlement> readEntitlementByTier(
+        Connection connection,
+        UUID playerUuid,
+        String tierKey
+    ) throws SQLException {
+        try (PreparedStatement query = connection.prepareStatement("""
+            SELECT %s
+            FROM cct_membership_entitlements e
+            JOIN cct_membership_tiers t ON t.tier_key = e.tier_key
+            WHERE e.player_uuid = ? AND e.tier_key = ?
+                AND e.state IN ('ACTIVE', 'PAUSED')
+            ORDER BY CASE e.state WHEN 'ACTIVE' THEN 0 ELSE 1 END, e.created_at DESC
+            LIMIT 1 FOR UPDATE
+            """.formatted(ENTITLEMENT_COLUMNS))) {
+            query.setBytes(1, UuidBinary.encode(playerUuid));
+            query.setString(2, tierKey);
             try (ResultSet result = query.executeQuery()) {
                 return result.next() ? Optional.of(mapEntitlement(result)) : Optional.empty();
             }

@@ -29,6 +29,7 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -43,23 +44,44 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
     private final PlatformTaskExecutor platformTasks;
     private final CctLogger logger;
     private final ZoneId timezone;
+    private final PaperMessages messages;
+    private final PaperMenus menus;
 
     PaperPromotionAdminCommand(
         ProviderRegistry providers,
         PlatformTaskExecutor platformTasks,
         CctConfig config,
-        CctLogger logger
+        CctLogger logger,
+        PaperMessages messages,
+        PaperMenus menus
     ) {
         this.providers = providers;
         this.platformTasks = platformTasks;
         this.logger = logger;
         this.timezone = ZoneId.of(config.promotion().timezone());
+        this.messages = messages;
+        this.menus = menus;
     }
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!sender.hasPermission("cctsystem.admin")) {
-            sender.sendMessage("§c没有权限");
+            sender.sendMessage(messages.component("commands.no-permission"));
+            return true;
+        }
+        if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
+            usage(sender);
+            return true;
+        }
+        if (args[0].equalsIgnoreCase("reload")) {
+            try {
+                messages.reload();
+                menus.reload();
+                sender.sendMessage(messages.component("commands.reloaded"));
+            } catch (RuntimeException exception) {
+                logger.warn("Unable to reload menu configuration", exception);
+                sender.sendMessage(messages.component("commands.reload-failed"));
+            }
             return true;
         }
         if (args.length >= 2 && args[0].equalsIgnoreCase("member")) {
@@ -76,7 +98,7 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         }
         PromotionService service = providers.find(PromotionServiceProvider.KEY).orElse(null);
         if (service == null) {
-            sender.sendMessage("§c折扣服务仅在业务节点可用");
+            sender.sendMessage(messages.component("admin.promotion-service-unavailable"));
             return true;
         }
         try {
@@ -88,7 +110,7 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
                 default -> usage(sender);
             }
         } catch (IllegalArgumentException | DateTimeParseException exception) {
-            sender.sendMessage("§c参数无效");
+            sender.sendMessage(messages.component("commands.invalid-arguments"));
             usage(sender);
         }
         return true;
@@ -97,7 +119,7 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
     private void redeem(CommandSender sender, String[] args) {
         RedeemCodeService service = providers.find(RedeemCodeServiceProvider.KEY).orElse(null);
         if (service == null) {
-            sender.sendMessage("§c兑换码服务仅在业务节点可用");
+            sender.sendMessage(messages.component("admin.redeem-service-unavailable"));
             return;
         }
         if (args.length < 7 || !args[1].equalsIgnoreCase("generate")) {
@@ -130,18 +152,22 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
             Instant until = validity(args[validityIndex], now);
             String note = args.length > noteIndex
                 ? String.join(" ", Arrays.copyOfRange(args, noteIndex, args.length))
-                : "管理员生成";
+                : messages.raw("admin.default-redeem-note");
             service.generate(new GenerateRedeemCodesRequest(
                 count, maxUses, now, until, sender.getName(), note, List.of(reward)
             )).whenComplete((batch, failure) -> main(() -> {
                 if (failure != null) {
                     logger.warn("Unable to generate redeem codes", failure);
-                    sender.sendMessage("§c生成兑换码失败");
+                    sender.sendMessage(messages.component("admin.redeem-generate-failed"));
                     return;
                 }
-                sender.sendMessage("§a已生成 " + batch.codes().size() + " 个兑换码");
-                batch.codes().forEach(code -> sender.sendMessage("§f" + code));
-                sender.sendMessage("§7兑换码仅在这里显示一次，请立即保存");
+                sender.sendMessage(messages.component("admin.redeem-generated", Map.of(
+                    "count", batch.codes().size()
+                )));
+                batch.codes().forEach(code -> sender.sendMessage(messages.component(
+                    "admin.redeem-code", Map.of("code", code)
+                )));
+                sender.sendMessage(messages.component("admin.redeem-save-now"));
             }));
         } catch (IllegalArgumentException exception) {
             redeemUsage(sender);
@@ -163,7 +189,7 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         IdentityService identities = providers.find(IdentityProvider.KEY).orElse(null);
         MembershipService memberships = providers.find(MembershipServiceProvider.KEY).orElse(null);
         if (identities == null || memberships == null) {
-            sender.sendMessage("§c会员服务仅在业务节点可用");
+            sender.sendMessage(messages.component("admin.membership-service-unavailable"));
             return;
         }
         String action = args[1].toLowerCase(java.util.Locale.ROOT);
@@ -174,7 +200,7 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         String playerName = args[2];
         identities.findByName(playerName).whenComplete((identity, identityFailure) -> {
             if (identityFailure != null || identity.isEmpty()) {
-                main(() -> sender.sendMessage("§c未找到该玩家"));
+                main(() -> sender.sendMessage(messages.component("admin.player-not-found")));
                 return;
             }
             try {
@@ -209,7 +235,7 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
                 yield new AdminMembershipRequest(
                     AdminMembershipAction.GRANT,
                     playerUuid,
-                    args[3].toLowerCase(java.util.Locale.ROOT),
+                    tierKey(args[3]),
                     Integer.parseInt(args[4]),
                     null,
                     actor,
@@ -217,21 +243,32 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
                 );
             }
             case "extend" -> {
-                if (args.length < 5) throw new IllegalArgumentException();
+                if (args.length < 6) throw new IllegalArgumentException();
                 yield new AdminMembershipRequest(
                     AdminMembershipAction.EXTEND,
                     playerUuid,
+                    tierKey(args[3]),
+                    Integer.parseInt(args[4]),
                     null,
-                    Integer.parseInt(args[3]),
+                    actor,
+                    String.join(" ", Arrays.copyOfRange(args, 5, args.length))
+                );
+            }
+            case "reclaim", "remove" -> {
+                if (args.length < 5) throw new IllegalArgumentException();
+                yield new AdminMembershipRequest(
+                    AdminMembershipAction.RECLAIM,
+                    playerUuid,
+                    tierKey(args[3]),
+                    0,
                     null,
                     actor,
                     String.join(" ", Arrays.copyOfRange(args, 4, args.length))
                 );
             }
-            case "remove", "pause", "resume" -> {
+            case "pause", "resume" -> {
                 if (args.length < 4) throw new IllegalArgumentException();
                 AdminMembershipAction mapped = switch (action) {
-                    case "remove" -> AdminMembershipAction.REMOVE;
                     case "pause" -> AdminMembershipAction.PAUSE;
                     default -> AdminMembershipAction.RESUME;
                 };
@@ -272,20 +309,27 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         main(() -> {
             if (failure != null) {
                 logger.warn("Membership admin operation failed", failure);
-                sender.sendMessage("§c会员操作失败");
+                sender.sendMessage(messages.component("admin.member-operation-failed"));
                 return;
             }
             if (summary.active() == null) {
-                sender.sendMessage("§f" + playerName + " §7暂无生效会员");
+                sender.sendMessage(messages.component("admin.member-none", Map.of(
+                    "player", playerName
+                )));
             } else {
-                sender.sendMessage("§f" + playerName + " §a" + summary.active().tier().displayName()
-                    + " §7到期 " + date(summary.active().expiresAt()));
+                sender.sendMessage(messages.component("admin.member-active", Map.of(
+                    "player", playerName,
+                    "tier", summary.active().tier().displayName(),
+                    "expiry", date(summary.active().expiresAt())
+                )));
             }
             if (!summary.paused().isEmpty()) {
-                sender.sendMessage("§7已暂停 " + summary.paused().size() + " 项");
+                sender.sendMessage(messages.component("admin.member-paused", Map.of(
+                    "count", summary.paused().size()
+                )));
             }
             if (!"APPLIED".equals(summary.permissionSyncStatus())) {
-                sender.sendMessage("§eLuckPerms 权限同步中");
+                sender.sendMessage(messages.component("admin.member-syncing"));
             }
         });
     }
@@ -308,17 +352,20 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         String target = args[6].equalsIgnoreCase("all") ? null : args[6].toLowerCase(java.util.Locale.ROOT);
         String reason = args.length > 7
             ? String.join(" ", Arrays.copyOfRange(args, 7, args.length))
-            : "管理员活动";
+            : messages.raw("admin.default-promotion-note");
         String name = trimName((offBps / 100.0) + "% OFF");
         service.create(new CreatePromotionRequest(
             name, target, offBps, now, end, 0, sender.getName(), reason
         )).whenComplete((promotion, failure) -> main(() -> {
             if (failure != null) {
                 logger.warn("Unable to create membership promotion", failure);
-                sender.sendMessage("§c创建折扣失败，请检查等级与时间");
+                sender.sendMessage(messages.component("admin.promotion-create-failed"));
             } else {
-                sender.sendMessage("§a折扣已开启 §7" + shortId(promotion)
-                    + " §f减" + percent(promotion) + "% §7至 " + date(promotion.endsAt()));
+                sender.sendMessage(messages.component("admin.promotion-created", Map.of(
+                    "id", shortId(promotion),
+                    "percent", percent(promotion),
+                    "expiry", date(promotion.endsAt())
+                )));
             }
         }));
     }
@@ -332,9 +379,10 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         service.stop(id, sender.getName(), reason, Instant.now()).whenComplete((stopped, failure) -> main(() -> {
             if (failure != null) {
                 logger.warn("Unable to stop membership promotion", failure);
-                sender.sendMessage("§c停止折扣失败");
+                sender.sendMessage(messages.component("admin.promotion-stop-failed"));
             } else {
-                sender.sendMessage(stopped ? "§a折扣已停止" : "§e折扣不存在或已经停止");
+                sender.sendMessage(messages.component(stopped
+                    ? "admin.promotion-stopped" : "admin.promotion-not-active"));
             }
         }));
     }
@@ -343,14 +391,18 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         service.listCurrent(Instant.now()).whenComplete((promotions, failure) -> main(() -> {
             if (failure != null) {
                 logger.warn("Unable to list membership promotions", failure);
-                sender.sendMessage("§c读取折扣失败");
+                sender.sendMessage(messages.component("admin.promotion-list-failed"));
             } else if (promotions.isEmpty()) {
-                sender.sendMessage("§7当前没有折扣");
+                sender.sendMessage(messages.component("admin.promotion-list-empty"));
             } else {
-                promotions.forEach(promotion -> sender.sendMessage(
-                    "§f" + promotion.promotionId() + " §a减" + percent(promotion)
-                        + "% §7" + target(promotion) + " → " + date(promotion.endsAt())
-                ));
+                promotions.forEach(promotion -> sender.sendMessage(messages.component(
+                    "admin.promotion-list-line", Map.of(
+                        "id", promotion.promotionId(),
+                        "percent", percent(promotion),
+                        "target", target(promotion),
+                        "expiry", date(promotion.endsAt())
+                    )
+                )));
             }
         }));
     }
@@ -361,13 +413,17 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         }
         service.find(UUID.fromString(args[2])).whenComplete((promotion, failure) -> main(() -> {
             if (failure != null) {
-                sender.sendMessage("§c未找到折扣");
+                sender.sendMessage(messages.component("admin.promotion-not-found"));
             } else {
-                sender.sendMessage("§f" + promotion.promotionId());
-                sender.sendMessage("§7范围 §f" + target(promotion)
-                    + " §7折扣 §a减" + percent(promotion) + "%");
-                sender.sendMessage("§7结束 §f" + date(promotion.endsAt())
-                    + " §7状态 §f" + promotion.status());
+                sender.sendMessage(messages.component("admin.promotion-info-id", Map.of(
+                    "id", promotion.promotionId()
+                )));
+                sender.sendMessage(messages.component("admin.promotion-info-summary", Map.of(
+                    "target", target(promotion), "percent", percent(promotion)
+                )));
+                sender.sendMessage(messages.component("admin.promotion-info-state", Map.of(
+                    "expiry", date(promotion.endsAt()), "status", promotion.status()
+                )));
             }
         }));
     }
@@ -380,7 +436,7 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         String[] args
     ) {
         if (args.length == 1) {
-            return List.of("discount", "member", "redeem");
+            return List.of("help", "reload", "discount", "member", "redeem");
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("redeem")) {
             return List.of("generate");
@@ -389,7 +445,14 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
             return List.of("points", "membership");
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("member")) {
-            return List.of("info", "grant", "extend", "remove", "pause", "resume", "expiry");
+            return List.of(
+                "info", "grant", "extend", "reclaim", "remove", "pause", "resume", "expiry"
+            );
+        }
+        if (args.length == 4 && args[0].equalsIgnoreCase("member")
+            && List.of("grant", "extend", "reclaim", "remove")
+                .contains(args[1].toLowerCase(java.util.Locale.ROOT))) {
+            return List.of("vip", "vip_plus", "mvp", "mvp_plus");
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("discount")) {
             return List.of("create", "stop", "list", "info");
@@ -418,8 +481,9 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         return BigDecimal.valueOf(promotion.percentOffBps(), 2).stripTrailingZeros().toPlainString();
     }
 
-    private static String target(Promotion promotion) {
-        return promotion.targetTierKey() == null ? "全部等级" : promotion.targetTierKey();
+    private String target(Promotion promotion) {
+        return promotion.targetTierKey() == null
+            ? messages.raw("admin.all-tiers") : promotion.targetTierKey();
     }
 
     private static String shortId(Promotion promotion) {
@@ -430,24 +494,25 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         return value.length() <= 64 ? value : value.substring(0, 64);
     }
 
-    private static void usage(CommandSender sender) {
-        sender.sendMessage("§7/cctadmin discount create membership <off%> <yyyy-MM-dd> <HH:mm> <all|等级> [备注]");
-        sender.sendMessage("§7/cctadmin discount <stop|info> <完整ID> [原因]");
-        sender.sendMessage("§7/cctadmin discount list");
-        memberUsage(sender);
-        redeemUsage(sender);
+    private static String tierKey(String value) {
+        return switch (value.toLowerCase(java.util.Locale.ROOT)) {
+            case "vip+", "vipp", "vip_plus" -> "vip_plus";
+            case "mvp+", "mvpp", "mvp_plus" -> "mvp_plus";
+            case "vip" -> "vip";
+            case "mvp" -> "mvp";
+            default -> throw new IllegalArgumentException("Unknown membership tier");
+        };
     }
 
-    private static void memberUsage(CommandSender sender) {
-        sender.sendMessage("§7/cctadmin member info <玩家>");
-        sender.sendMessage("§7/cctadmin member grant <玩家> <等级> <天数> <原因>");
-        sender.sendMessage("§7/cctadmin member extend <玩家> <天数> <原因>");
-        sender.sendMessage("§7/cctadmin member <remove|pause|resume> <玩家> <原因>");
-        sender.sendMessage("§7/cctadmin member expiry <玩家> <yyyy-MM-dd> <HH:mm> <原因>");
+    private void usage(CommandSender sender) {
+        messages.components("commands.admin-help").forEach(sender::sendMessage);
     }
 
-    private static void redeemUsage(CommandSender sender) {
-        sender.sendMessage("§7/cctadmin redeem generate points <数量> <每码次数> <点券> <有效天数|never> [备注]");
-        sender.sendMessage("§7/cctadmin redeem generate membership <数量> <每码次数> <等级> <会员天数> <有效天数|never> [备注]");
+    private void memberUsage(CommandSender sender) {
+        usage(sender);
+    }
+
+    private void redeemUsage(CommandSender sender) {
+        usage(sender);
     }
 }

@@ -21,4 +21,5 @@ dependencies {
     compileOnly("org.black_ixx:playerpoints:3.3.5")
     compileOnly("com.github.MilkBowl:VaultAPI:1.7.1")
     compileOnly("net.luckperms:api:5.5")
+    compileOnly("me.clip:placeholderapi:2.12.2")
 }

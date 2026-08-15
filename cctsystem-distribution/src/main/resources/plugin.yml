@@ -8,21 +8,58 @@ description: CCTStudio unified network core
 commands:
   cct:
     description: CCTSystem player menu
-    usage: /cct [me|vip|exchange|redeem]
+    usage: /cct help
     permission: cctsystem.use
   cctadmin:
     description: CCTSystem administrator command
-    usage: /cctadmin <discount|member|redeem>
-    permission: cctsystem.admin
+    usage: /cctadmin help
+  shout:
+    description: CCTSystem cross-server shout
+    usage: /shout <message>
+  nick:
+    description: CCTSystem nickname menu
+    usage: /nick
+  unnick:
+    description: Disable CCTSystem nickname
+    usage: /unnick
+  rewards:
+    description: CCTSystem delivery rewards
+    usage: /rewards
+  lobby:
+    description: Return to the lobby
+    usage: /lobby
+    aliases: [hub]
+  vanish:
+    description: Toggle CCTSystem network vanish
+    usage: /vanish
+    aliases: [v]
+    permission: cctsystem.vanish
 permissions:
   cctsystem.use:
     default: true
   cctsystem.admin:
     default: op
+  cctsystem.shout:
+    default: false
+  cctsystem.nick:
+    default: false
+  cctsystem.vanish:
+    default: false
+  cctsystem.reward.vip:
+    default: false
+  cctsystem.reward.vipp:
+    default: false
+  cctsystem.reward.mvp:
+    default: false
+  cctsystem.reward.mvpp:
+    default: false
 softdepend:
   - AuthMe
   - PlayerPoints
   - Vault
   - LuckPerms
   - SkinsRestorer
+  - LibsDisguises
   - PlaceholderAPI
+  - TAB
+  - QQBotAuth

@@ -2,6 +2,7 @@ package cn.cctstudio.cctsystem.auth;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import cn.cctstudio.cctsystem.bridge.RpcHandlingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -15,7 +16,8 @@ class AuthLoginRequestTest {
         AuthLoginRequest request = AuthLoginRequest.parse(JSON.readTree(
             "{\"username\":\"Player_1\",\"password\":\"not-logged\"}"
         ));
-        assertEquals("Player_1", request.playerName());
+        assertEquals("Player_1", request.identifier());
+        assertTrue(request.playerUuid().isEmpty());
     }
 
     @Test

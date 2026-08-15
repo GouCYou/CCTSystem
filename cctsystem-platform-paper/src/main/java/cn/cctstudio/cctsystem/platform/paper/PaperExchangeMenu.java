@@ -13,17 +13,18 @@ import cn.cctstudio.cctsystem.exchange.ExchangeService;
 import cn.cctstudio.cctsystem.exchange.ExchangeServiceProvider;
 import cn.cctstudio.cctsystem.exchange.ExchangeStatus;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.text.NumberFormat;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Material;
 import org.bukkit.command.Command;
@@ -43,10 +44,8 @@ import org.bukkit.inventory.meta.SkullMeta;
 import org.bukkit.plugin.java.JavaPlugin;
 
 final class PaperExchangeMenu implements Listener, CommandExecutor, TabCompleter {
-    private static final Component TITLE = plain("金币兑换", NamedTextColor.DARK_GRAY);
     private static final DateTimeFormatter RESET_TIME = DateTimeFormatter.ofPattern("MM-dd HH:mm");
     private static final NumberFormat INTEGER = NumberFormat.getIntegerInstance(Locale.CHINA);
-    private static final Set<Integer> EXCHANGE_SLOTS = Set.of(11, 13, 15);
 
     private final JavaPlugin plugin;
     private final ProviderRegistry providers;
@@ -54,19 +53,31 @@ final class PaperExchangeMenu implements Listener, CommandExecutor, TabCompleter
     private final CctLogger logger;
     private final ZoneId timezone;
     private final String sourceId;
-    private final Set<UUID> inFlight = ConcurrentHashMap.newKeySet();
+    private final java.util.Set<UUID> inFlight = ConcurrentHashMap.newKeySet();
+    private final PaperMessages messages;
+    private final PaperMenus menus;
+    private final PaperLuckPermsTitles titles;
+    private final Map<UUID, CompletableFuture<ExchangeQuote>> loading =
+        new ConcurrentHashMap<>();
+    private final Map<UUID, ExchangeQuote> quoteCache = new ConcurrentHashMap<>();
 
     PaperExchangeMenu(
         JavaPlugin plugin,
         ProviderRegistry providers,
         CctConfig config,
         PlatformTaskExecutor platformTasks,
-        CctLogger logger
+        CctLogger logger,
+        PaperMessages messages,
+        PaperMenus menus,
+        PaperLuckPermsTitles titles
     ) {
         this.plugin = plugin;
         this.providers = providers;
         this.platformTasks = platformTasks;
         this.logger = logger;
+        this.messages = messages;
+        this.menus = menus;
+        this.titles = titles;
         this.timezone = ZoneId.of(config.exchange().timezone());
         this.sourceId = config.exchange().sources().stream()
             .filter(ExchangeSourceConfig::enabled)
@@ -85,11 +96,11 @@ final class PaperExchangeMenu implements Listener, CommandExecutor, TabCompleter
         String[] arguments
     ) {
         if (!(sender instanceof Player player)) {
-            sender.sendMessage("该命令只能由玩家使用");
+            sender.sendMessage(messages.component("commands.only-player"));
             return true;
         }
         if (arguments.length == 0 || !arguments[0].equalsIgnoreCase("exchange")) {
-            player.sendMessage(plain("使用 /cct exchange", NamedTextColor.GRAY));
+            player.sendMessage(messages.component("menus.exchange.usage"));
             return true;
         }
         if (arguments.length == 1) {
@@ -100,7 +111,7 @@ final class PaperExchangeMenu implements Listener, CommandExecutor, TabCompleter
             executeCommand(player, arguments[1]);
             return true;
         }
-        player.sendMessage(plain("使用 /cct exchange [1|10|100|max]", NamedTextColor.GRAY));
+        player.sendMessage(messages.component("menus.exchange.usage"));
         return true;
     }
 
@@ -132,21 +143,24 @@ final class PaperExchangeMenu implements Listener, CommandExecutor, TabCompleter
             return;
         }
         int slot = event.getRawSlot();
-        if (slot == 22) {
+        String action = holder.layout.actionAt(slot);
+        if ("CLOSE".equals(action)) {
             player.closeInventory();
             return;
         }
-        if (!EXCHANGE_SLOTS.contains(slot)) {
+        if (!"EXCHANGE".equals(action)) return;
+        int amount;
+        try {
+            amount = Integer.parseInt(holder.layout.valueAt(slot));
+        } catch (NumberFormatException exception) {
             return;
         }
-        int amount = switch (slot) {
-            case 11 -> 1;
-            case 13 -> 10;
-            case 15 -> 100;
-            default -> 0;
-        };
+        if (holder.quote() == null) {
+            player.sendActionBar(messages.component("menus.exchange.data-loading"));
+            return;
+        }
         if (amount > holder.quote().maximumExchangeablePoints()) {
-            player.sendActionBar(plain(unavailableReason(holder.quote(), amount), NamedTextColor.RED));
+            player.sendActionBar(messages.component(unavailableReasonPath(holder.quote(), amount)));
             return;
         }
         execute(player, amount, ExchangeOrigin.MENU);
@@ -164,59 +178,97 @@ final class PaperExchangeMenu implements Listener, CommandExecutor, TabCompleter
         if (service == null) {
             return;
         }
-        service.quote(player.getUniqueId(), sourceId).whenComplete((quote, throwable) -> platformTasks
+        UUID playerUuid = player.getUniqueId();
+        PaperMenus.MenuDefinition layout = menus.get("exchange");
+        ExchangeHolder holder = new ExchangeHolder(quoteCache.get(playerUuid), layout);
+        holder.inventory = plugin.getServer().createInventory(
+            holder, layout.size(), messages.component(layout.titleKey())
+        );
+        renderInventory(player, holder);
+        player.openInventory(holder.inventory);
+        CompletableFuture<ExchangeQuote> load = loading.computeIfAbsent(
+            playerUuid,
+            ignored -> service.quote(playerUuid, sourceId).toCompletableFuture()
+        );
+        load.whenComplete((quote, throwable) -> platformTasks
             .callMain(() -> {
+                loading.remove(playerUuid, load);
                 if (!plugin.isEnabled() || !player.isOnline()) {
                     return null;
                 }
                 if (throwable != null) {
                     logger.warn("Unable to prepare exchange menu", throwable);
-                    player.sendMessage(plain("兑换暂不可用", NamedTextColor.RED));
+                    if (player.getOpenInventory().getTopInventory() == holder.inventory) {
+                        player.sendActionBar(messages.component("menus.exchange.load-failed"));
+                    }
                     return null;
                 }
-                player.openInventory(createInventory(player, quote));
+                holder.quote = quote;
+                quoteCache.put(playerUuid, quote);
+                if (player.getOpenInventory().getTopInventory() == holder.inventory) {
+                    renderInventory(player, holder);
+                }
                 return null;
             }));
     }
 
-    private Inventory createInventory(Player player, ExchangeQuote quote) {
-        ExchangeHolder holder = new ExchangeHolder(quote);
-        Inventory inventory = plugin.getServer().createInventory(holder, 27, TITLE);
-        holder.inventory = inventory;
-        ItemStack filler = item(Material.GRAY_STAINED_GLASS_PANE, Component.empty(), List.of());
-        for (int slot = 0; slot < inventory.getSize(); slot++) {
-            inventory.setItem(slot, filler);
+    private void renderInventory(Player player, ExchangeHolder holder) {
+        Inventory inventory = holder.inventory;
+        holder.layout.fill(inventory);
+        PaperMenus.MenuItemDefinition profile = holder.layout.item("profile");
+        inventory.setItem(profile.slot(), summary(player, holder.quote));
+        for (PaperMenus.MenuItemDefinition definition : holder.layout.items().values()) {
+            if (!"EXCHANGE".equals(definition.action())) continue;
+            int points;
+            try {
+                points = Integer.parseInt(definition.value());
+            } catch (NumberFormatException exception) {
+                continue;
+            }
+            inventory.setItem(definition.slot(), holder.quote == null
+                ? loadingButton(points, definition.material(Material.GRAY_DYE))
+                : exchangeButton(holder.quote, points, definition.material(Material.EMERALD)));
         }
-        inventory.setItem(4, summary(player, quote));
-        inventory.setItem(11, exchangeButton(quote, 1, Material.LIME_DYE));
-        inventory.setItem(13, exchangeButton(quote, 10, Material.EMERALD));
-        inventory.setItem(15, exchangeButton(quote, 100, Material.EMERALD_BLOCK));
-        inventory.setItem(22, item(
-            Material.BARRIER,
-            plain("关闭", NamedTextColor.RED),
-            List.of()
+        PaperMenus.MenuItemDefinition close = holder.layout.item("close");
+        inventory.setItem(close.slot(), item(
+            close.material(Material.BARRIER), messages.component("menus.personal.close-name"), List.of()
         ));
-        return inventory;
     }
 
     private ItemStack summary(Player player, ExchangeQuote quote) {
+        List<Component> lore = quote == null
+            ? List.of(messages.component("menus.exchange.data-loading"))
+            : List.of(
+                messages.component("menus.exchange.points", Map.of("value", format(quote.pointsBalance()))),
+                messages.component("menus.exchange.currency", Map.of(
+                    "currency", quote.currencyDisplayName(), "value", money(quote.currencyBalance())
+                )),
+                messages.component("menus.exchange.weekly", Map.of(
+                    "used", format(quote.weeklyUsedPoints()), "limit", format(quote.weeklyLimitPoints())
+                )),
+                messages.component("menus.exchange.remaining", Map.of("value", format(quote.weeklyRemainingPoints()))),
+                messages.component("menus.exchange.reset", Map.of(
+                    "value", RESET_TIME.format(quote.resetsAt().atZone(timezone))
+                ))
+            );
         ItemStack head = item(
             Material.PLAYER_HEAD,
-            plain(player.getName(), NamedTextColor.WHITE),
-            List.of(
-                line("点券", format(quote.pointsBalance()), NamedTextColor.GOLD),
-                line(quote.currencyDisplayName(), money(quote.currencyBalance()), NamedTextColor.YELLOW),
-                line("本周", format(quote.weeklyUsedPoints()) + " / " + format(quote.weeklyLimitPoints()),
-                    NamedTextColor.AQUA),
-                line("剩余", format(quote.weeklyRemainingPoints()), NamedTextColor.GREEN),
-                line("重置", RESET_TIME.format(quote.resetsAt().atZone(timezone)), NamedTextColor.GRAY)
-            )
+            titles.playerIdentity(player),
+            lore
         );
         if (head.getItemMeta() instanceof SkullMeta skull) {
-            skull.setOwningPlayer(player);
+            skull.setPlayerProfile(player.getPlayerProfile());
             head.setItemMeta(skull);
         }
         return head;
+    }
+
+    private ItemStack loadingButton(int points, Material material) {
+        return item(
+            material,
+            messages.component("menus.exchange.button-disabled", Map.of("points", points)),
+            List.of(messages.component("menus.exchange.data-loading"))
+        );
     }
 
     private ItemStack exchangeButton(ExchangeQuote quote, int points, Material availableMaterial) {
@@ -224,18 +276,20 @@ final class PaperExchangeMenu implements Listener, CommandExecutor, TabCompleter
         BigDecimal cost = quote.costFor(points);
         BigDecimal after = quote.currencyBalance().subtract(cost).max(BigDecimal.ZERO);
         List<Component> lore = new ArrayList<>();
-        lore.add(line("需要", money(cost) + " " + quote.currencyDisplayName(), NamedTextColor.YELLOW));
-        lore.add(line("兑换后", money(after), NamedTextColor.GRAY));
-        lore.add(line("本周剩余", format(Math.max(0, quote.weeklyRemainingPoints() - points)),
-            NamedTextColor.AQUA));
+        lore.add(messages.component("menus.exchange.need", Map.of(
+            "cost", money(cost), "currency", quote.currencyDisplayName()
+        )));
+        lore.add(messages.component("menus.exchange.after", Map.of("value", money(after))));
+        lore.add(messages.component("menus.exchange.weekly-after", Map.of(
+            "value", format(Math.max(0, quote.weeklyRemainingPoints() - points))
+        )));
         lore.add(Component.empty());
-        lore.add(plain(
-            available ? "点击兑换" : unavailableReason(quote, points),
-            available ? NamedTextColor.GREEN : NamedTextColor.RED
-        ));
+        lore.add(messages.component(available
+            ? "menus.exchange.click" : unavailableReasonPath(quote, points)));
         return item(
             available ? availableMaterial : Material.GRAY_DYE,
-            plain("兑换 " + points + " 点券", available ? NamedTextColor.GREEN : NamedTextColor.GRAY),
+            messages.component(available
+                ? "menus.exchange.button" : "menus.exchange.button-disabled", Map.of("points", points)),
             lore
         );
     }
@@ -251,7 +305,7 @@ final class PaperExchangeMenu implements Listener, CommandExecutor, TabCompleter
                     return null;
                 }
                 if (throwable != null) {
-                    player.sendMessage(plain("兑换暂不可用", NamedTextColor.RED));
+                    player.sendMessage(messages.component("menus.exchange.unavailable"));
                     return null;
                 }
                 int amount;
@@ -266,11 +320,11 @@ final class PaperExchangeMenu implements Listener, CommandExecutor, TabCompleter
                 }
                 if ((amount != 1 && amount != 10 && amount != 100)
                     && !rawAmount.equalsIgnoreCase("max")) {
-                    player.sendMessage(plain("仅支持 1、10、100 或 max", NamedTextColor.GRAY));
+                    player.sendMessage(messages.component("menus.exchange.invalid-amount"));
                     return null;
                 }
                 if (amount < 1 || amount > quote.maximumExchangeablePoints()) {
-                    player.sendMessage(plain(unavailableReason(quote, Math.max(1, amount)), NamedTextColor.RED));
+                    player.sendMessage(messages.component(unavailableReasonPath(quote, Math.max(1, amount))));
                     return null;
                 }
                 execute(player, amount, ExchangeOrigin.COMMAND);
@@ -281,10 +335,10 @@ final class PaperExchangeMenu implements Listener, CommandExecutor, TabCompleter
     private void execute(Player player, int amount, ExchangeOrigin origin) {
         ExchangeService service = service(player);
         if (service == null || !inFlight.add(player.getUniqueId())) {
-            player.sendActionBar(plain("操作处理中", NamedTextColor.YELLOW));
+            player.sendActionBar(messages.component("menus.exchange.operation-processing"));
             return;
         }
-        player.sendActionBar(plain("正在兑换…", NamedTextColor.YELLOW));
+        player.sendActionBar(messages.component("menus.exchange.processing"));
         service.execute(new ExchangeRequest(
             player.getUniqueId(),
             sourceId,
@@ -298,7 +352,7 @@ final class PaperExchangeMenu implements Listener, CommandExecutor, TabCompleter
             }
             if (throwable != null) {
                 logger.warn("Player exchange request failed", throwable);
-                player.sendMessage(plain("兑换暂不可用", NamedTextColor.RED));
+                player.sendMessage(messages.component("menus.exchange.unavailable"));
                 return null;
             }
             player.sendMessage(resultMessage(result));
@@ -311,57 +365,50 @@ final class PaperExchangeMenu implements Listener, CommandExecutor, TabCompleter
 
     private ExchangeService service(Player player) {
         if (sourceId == null) {
-            player.sendMessage(plain("当前服务器未开放兑换", NamedTextColor.GRAY));
+            player.sendMessage(messages.component("menus.exchange.unavailable-server"));
             return null;
         }
         return providers.find(ExchangeServiceProvider.KEY).orElseGet(() -> {
-            player.sendMessage(plain("兑换暂不可用", NamedTextColor.RED));
+            player.sendMessage(messages.component("menus.exchange.unavailable"));
             return null;
         });
     }
 
-    private static Component resultMessage(ExchangeResult result) {
+    private Component resultMessage(ExchangeResult result) {
         if (result.status() == ExchangeStatus.COMPLETED) {
-            return plain("已兑换 " + result.requestedPoints() + " 点券", NamedTextColor.GREEN);
+            return messages.component("menus.exchange.completed", Map.of("points", result.requestedPoints()));
         }
         if (result.status() == ExchangeStatus.REVIEW_REQUIRED
             || result.status() == ExchangeStatus.COMPENSATION_PENDING) {
-            return plain("交易待核对，请联系管理员", NamedTextColor.RED);
+            return messages.component("menus.exchange.review-required");
         }
-        return plain(switch (result.errorCode() == null ? "" : result.errorCode()) {
-            case "INSUFFICIENT_CURRENCY" -> "金币不足";
-            case "WEEKLY_LIMIT_EXCEEDED" -> "本周额度不足";
-            case "OPERATION_IN_PROGRESS" -> "已有操作处理中";
-            default -> "兑换未完成";
-        }, NamedTextColor.RED);
+        return messages.component(switch (result.errorCode() == null ? "" : result.errorCode()) {
+            case "INSUFFICIENT_CURRENCY" -> "menus.exchange.insufficient-currency";
+            case "WEEKLY_LIMIT_EXCEEDED" -> "menus.exchange.insufficient-limit";
+            case "OPERATION_IN_PROGRESS" -> "menus.exchange.operation-processing";
+            default -> "menus.exchange.incomplete";
+        });
     }
 
-    private static String unavailableReason(ExchangeQuote quote, int points) {
+    private static String unavailableReasonPath(ExchangeQuote quote, int points) {
         if (points > quote.weeklyRemainingPoints()) {
-            return "本周额度不足";
+            return "menus.exchange.insufficient-limit";
         }
-        return "金币不足";
+        return "menus.exchange.insufficient-currency";
     }
 
     private static ItemStack item(Material material, Component name, List<Component> lore) {
         ItemStack item = new ItemStack(material);
         ItemMeta meta = item.getItemMeta();
-        meta.displayName(name);
-        meta.lore(lore);
+        meta.displayName(name.decoration(TextDecoration.ITALIC, false));
+        meta.lore(lore.stream()
+            .map(line -> line.decoration(TextDecoration.ITALIC, false)).toList());
         item.setItemMeta(meta);
         return item;
     }
 
-    private static Component line(String label, String value, NamedTextColor valueColor) {
-        return plain(label + "  ", NamedTextColor.GRAY).append(plain(value, valueColor));
-    }
-
-    private static Component plain(String value, NamedTextColor color) {
-        return Component.text(value, color).decoration(TextDecoration.ITALIC, false);
-    }
-
     private static String money(BigDecimal value) {
-        return value.stripTrailingZeros().toPlainString();
+        return value.setScale(2, RoundingMode.DOWN).stripTrailingZeros().toPlainString();
     }
 
     private static String format(int value) {
@@ -369,11 +416,13 @@ final class PaperExchangeMenu implements Listener, CommandExecutor, TabCompleter
     }
 
     private static final class ExchangeHolder implements InventoryHolder {
-        private final ExchangeQuote quote;
+        private ExchangeQuote quote;
+        private final PaperMenus.MenuDefinition layout;
         private Inventory inventory;
 
-        private ExchangeHolder(ExchangeQuote quote) {
+        private ExchangeHolder(ExchangeQuote quote, PaperMenus.MenuDefinition layout) {
             this.quote = quote;
+            this.layout = layout;
         }
 
         ExchangeQuote quote() {

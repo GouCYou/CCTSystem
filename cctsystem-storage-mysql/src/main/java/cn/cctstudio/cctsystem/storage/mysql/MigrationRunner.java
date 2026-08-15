@@ -22,7 +22,10 @@ final class MigrationRunner {
         new Migration(1, "foundation", "/db/migration/V1__foundation.sql"),
         new Migration(2, "exchange", "/db/migration/V2__exchange.sql"),
         new Migration(3, "membership_and_promotions", "/db/migration/V3__membership_and_promotions.sql"),
-        new Migration(4, "redeem_codes", "/db/migration/V4__redeem_codes.sql")
+        new Migration(4, "redeem_codes", "/db/migration/V4__redeem_codes.sql"),
+        new Migration(5, "nickname_profiles", "/db/migration/V5__nickname_profiles.sql"),
+        new Migration(6, "delivery_rewards", "/db/migration/V6__delivery_rewards.sql"),
+        new Migration(7, "network_vanish", "/db/migration/V7__network_vanish.sql")
     );
 
     private final DataSource dataSource;

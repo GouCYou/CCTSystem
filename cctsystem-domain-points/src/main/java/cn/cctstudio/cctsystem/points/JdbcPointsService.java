@@ -8,12 +8,26 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Optional;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 
 final class JdbcPointsService implements PointsService {
+    private static final String COUNT_HISTORY = """
+        SELECT COUNT(*)
+        FROM cct_point_operations
+        WHERE player_uuid = ? AND status = 'COMPLETED'
+        """;
+    private static final String LIST_HISTORY = """
+        SELECT operation_id, delta_points, balance_after, source_type, source_ref, created_at
+        FROM cct_point_operations
+        WHERE player_uuid = ? AND status = 'COMPLETED'
+        ORDER BY created_at DESC, operation_id DESC
+        LIMIT ? OFFSET ?
+        """;
     private static final String INSERT_OPERATION = """
         INSERT INTO cct_point_operations(
             operation_id, player_uuid, delta_points, balance_before, status,
@@ -44,6 +58,47 @@ final class JdbcPointsService implements PointsService {
     @Override
     public CompletionStage<Integer> balance(UUID playerUuid) {
         return gateway.balance(playerUuid);
+    }
+
+    @Override
+    public CompletionStage<PointsLedgerPage> history(UUID playerUuid, int page, int pageSize) {
+        if (page < 1 || pageSize < 1 || pageSize > 50) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException("Invalid history page"));
+        }
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection connection = database.connection()) {
+                long totalItems;
+                try (PreparedStatement count = connection.prepareStatement(COUNT_HISTORY)) {
+                    count.setBytes(1, UuidBinary.encode(playerUuid));
+                    try (ResultSet result = count.executeQuery()) {
+                        result.next();
+                        totalItems = result.getLong(1);
+                    }
+                }
+                List<PointsLedgerEntry> items = new ArrayList<>();
+                try (PreparedStatement list = connection.prepareStatement(LIST_HISTORY)) {
+                    list.setBytes(1, UuidBinary.encode(playerUuid));
+                    list.setInt(2, pageSize);
+                    list.setInt(3, (page - 1) * pageSize);
+                    try (ResultSet result = list.executeQuery()) {
+                        while (result.next()) {
+                            items.add(new PointsLedgerEntry(
+                                UuidBinary.decode(result.getBytes("operation_id")),
+                                result.getInt("delta_points"),
+                                nullableInt(result, "balance_after"),
+                                result.getString("source_type"),
+                                result.getString("source_ref"),
+                                result.getTimestamp("created_at").toInstant()
+                            ));
+                        }
+                    }
+                }
+                int totalPages = Math.max(1, (int) Math.ceil(totalItems / (double) pageSize));
+                return new PointsLedgerPage(items, page, pageSize, totalItems, totalPages);
+            } catch (SQLException exception) {
+                throw new CompletionException("Unable to read point history", exception);
+            }
+        }, executors.blocking());
     }
 
     @Override

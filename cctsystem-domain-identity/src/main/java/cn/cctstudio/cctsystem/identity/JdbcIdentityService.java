@@ -8,6 +8,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -15,6 +16,11 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 
 final class JdbcIdentityService implements IdentityService {
+    private static final String FIND_BY_UUID = """
+        SELECT player_uuid, current_name
+        FROM cct_players
+        WHERE player_uuid = ?
+        """;
     private static final String UPSERT_PLAYER = """
         INSERT INTO cct_players(
             player_uuid, current_name, normalized_name, first_seen_at, last_seen_at
@@ -106,6 +112,28 @@ final class JdbcIdentityService implements IdentityService {
                 }
             }
         }
+    }
+
+    @Override
+    public CompletionStage<Optional<PlayerIdentity>> findByUuid(UUID playerUuid) {
+        Objects.requireNonNull(playerUuid, "playerUuid");
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection connection = database.connection();
+                 PreparedStatement statement = connection.prepareStatement(FIND_BY_UUID)) {
+                statement.setBytes(1, UuidBinary.encode(playerUuid));
+                try (ResultSet result = statement.executeQuery()) {
+                    if (!result.next()) {
+                        return Optional.empty();
+                    }
+                    return Optional.of(new PlayerIdentity(
+                        UuidBinary.decode(result.getBytes("player_uuid")),
+                        result.getString("current_name")
+                    ));
+                }
+            } catch (SQLException exception) {
+                throw new CompletionException("Unable to find player identity by UUID", exception);
+            }
+        }, executors.blocking());
     }
 
     @Override

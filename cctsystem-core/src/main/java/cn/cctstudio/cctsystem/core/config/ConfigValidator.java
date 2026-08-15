@@ -60,6 +60,12 @@ public final class ConfigValidator {
         if (membership.quoteTtlSeconds() < 5 || membership.quoteTtlSeconds() > 60) {
             throw new ConfigException("membership.quote-ttl-seconds must be between 5 and 60");
         }
+        if (membership.maxPurchaseDays() < 30 || membership.maxPurchaseDays() > 3650) {
+            throw new ConfigException("membership.max-purchase-days must be between 30 and 3650");
+        }
+        for (String group : membership.purchaseBlockedGroups()) {
+            requireId("membership.purchase-blocked-groups", group);
+        }
     }
 
     private static void validatePromotion(PromotionConfig promotion) {

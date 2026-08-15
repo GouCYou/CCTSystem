@@ -27,7 +27,8 @@ public final class MembershipRuntimeModule implements CctModule {
             DatabaseProvider.ID,
             PointsServiceProvider.ID,
             PromotionServiceProvider.ID,
-            MembershipPermissionGatewayProvider.ID
+            MembershipPermissionGatewayProvider.ID,
+            MembershipAccessGatewayProvider.ID
         ),
         Set.of()
     );
@@ -45,6 +46,8 @@ public final class MembershipRuntimeModule implements CctModule {
         PromotionService promotions = context.providers().find(PromotionServiceProvider.KEY).orElseThrow();
         MembershipPermissionGateway permissions = context.providers()
             .find(MembershipPermissionGatewayProvider.KEY).orElseThrow();
+        MembershipAccessGateway membershipAccess = context.providers()
+            .find(MembershipAccessGatewayProvider.KEY).orElseThrow();
         JdbcMembershipStore store = new JdbcMembershipStore(
             database, context.executors(), context.config().nodeId()
         );
@@ -64,8 +67,11 @@ public final class MembershipRuntimeModule implements CctModule {
                         store,
                         points,
                         promotions,
+                        membershipAccess,
                         clock,
-                        context.config().membership().quoteTtlSeconds()
+                        context.config().membership().quoteTtlSeconds(),
+                        context.config().membership().maxPurchaseDays(),
+                        context.config().membership().purchaseBlockedGroups()
                     )
                 );
                 projectionWorker = worker;

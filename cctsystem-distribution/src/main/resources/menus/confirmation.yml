@@ -1,0 +1,17 @@
+rows: 3
+title-key: menus.confirmation.title
+
+fill:
+  enabled: false
+  material: AIR
+  slots: []
+
+items:
+  confirm:
+    slot: 13
+    material: LIME_CONCRETE
+    action: CONFIRM_PURCHASE
+  back:
+    slot: 22
+    material: ARROW
+    action: OPEN_MEMBERSHIP

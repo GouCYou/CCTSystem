@@ -1,0 +1,86 @@
+rows: 6
+title-key: rewards.menu.title
+
+fill:
+  enabled: false
+  material: AIR
+  slots: []
+
+items:
+  profile:
+    slot: 4
+    material: PLAYER_HEAD
+    action: PROFILE
+  free:
+    slot: 20
+    material: CHEST_MINECART
+    action: CLAIM_REWARD
+    value: free
+  vip:
+    slot: 21
+    material: CHEST_MINECART
+    action: CLAIM_REWARD
+    value: vip
+  vipp:
+    slot: 22
+    material: CHEST_MINECART
+    action: CLAIM_REWARD
+    value: vipp
+  mvp:
+    slot: 23
+    material: CHEST_MINECART
+    action: CLAIM_REWARD
+    value: mvp
+  mvpp:
+    slot: 24
+    material: CHEST_MINECART
+    action: CLAIM_REWARD
+    value: mvpp
+  daily:
+    slot: 33
+    material: CHEST_MINECART
+    action: CLAIM_REWARD
+    value: daily
+  close:
+    slot: 49
+    material: BARRIER
+    action: CLOSE
+
+# 领取后会自动改为 claimed-material。命令由控制台执行，{player} 会替换为玩家名。
+rewards:
+  daily:
+    reset-policy: DAILY
+    cooldown-seconds: 86400
+    permission: ""
+    claimed-material: MINECART
+    commands: ["mysterydust add {player} 10"]
+  free:
+    reset-policy: MONTHLY
+    cooldown-seconds: 2592000
+    permission: ""
+    claimed-material: MINECART
+    commands: ["gmysterybox give {player} 1"]
+  vip:
+    reset-policy: MONTHLY
+    cooldown-seconds: 2592000
+    permission: cctsystem.reward.vip
+    claimed-material: MINECART
+    commands: ["gmysterybox give {player} 5"]
+  vipp:
+    reset-policy: MONTHLY
+    cooldown-seconds: 2592000
+    permission: cctsystem.reward.vipp
+    claimed-material: MINECART
+    commands: ["gmysterybox give {player} 5"]
+  mvp:
+    reset-policy: MONTHLY
+    cooldown-seconds: 2592000
+    permission: cctsystem.reward.mvp
+    claimed-material: MINECART
+    commands: ["gmysterybox give {player} 5"]
+  mvpp:
+    reset-policy: MONTHLY
+    cooldown-seconds: 2592000
+    permission: cctsystem.reward.mvpp
+    claimed-material: MINECART
+    commands: ["gmysterybox give {player} 5"]
