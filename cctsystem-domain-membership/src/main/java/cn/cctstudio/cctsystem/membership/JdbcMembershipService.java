@@ -28,6 +28,7 @@ final class JdbcMembershipService implements MembershipService {
     private final int quoteTtlSeconds;
     private final int maxPurchaseDays;
     private final Set<String> purchaseBlockedGroups;
+    private final Runnable projectionSignal;
 
     JdbcMembershipService(
         JdbcMembershipStore store,
@@ -37,7 +38,8 @@ final class JdbcMembershipService implements MembershipService {
         Clock clock,
         int quoteTtlSeconds,
         int maxPurchaseDays,
-        Set<String> purchaseBlockedGroups
+        Set<String> purchaseBlockedGroups,
+        Runnable projectionSignal
     ) {
         this.store = store;
         this.points = points;
@@ -47,6 +49,7 @@ final class JdbcMembershipService implements MembershipService {
         this.quoteTtlSeconds = quoteTtlSeconds;
         this.maxPurchaseDays = maxPurchaseDays;
         this.purchaseBlockedGroups = Set.copyOf(purchaseBlockedGroups);
+        this.projectionSignal = Objects.requireNonNull(projectionSignal, "projectionSignal");
     }
 
     @Override
@@ -129,7 +132,8 @@ final class JdbcMembershipService implements MembershipService {
         return store.existingResult(request.playerUuid(), request.idempotencyKey())
             .thenCompose(existing -> existing.<CompletionStage<MembershipOrderResult>>map(
                 CompletableFuture::completedFuture
-            ).orElseGet(() -> startPurchase(request)));
+            ).orElseGet(() -> startPurchase(request)))
+            .thenApply(this::signalProjection);
     }
 
     private CompletionStage<MembershipOrderResult> startPurchase(MembershipPurchaseRequest request) {
@@ -189,7 +193,7 @@ final class JdbcMembershipService implements MembershipService {
         }
         if (request.action() != AdminMembershipAction.EXTEND
             && request.action() != AdminMembershipAction.GRANT) {
-            return store.admin(request, now);
+            return store.admin(request, now).thenApply(this::signalProjection);
         }
         return summary(request.playerUuid()).thenCompose(summary -> {
             MembershipEntitlement entitlement = entitlement(summary, request.tierKey());
@@ -209,8 +213,20 @@ final class JdbcMembershipService implements MembershipService {
                     }
                 }
             }
-            return store.admin(request, now);
+            return store.admin(request, now).thenApply(this::signalProjection);
         });
+    }
+
+    private MembershipOrderResult signalProjection(MembershipOrderResult result) {
+        if (result.status() == MembershipOrderStatus.COMPLETED) {
+            projectionSignal.run();
+        }
+        return result;
+    }
+
+    private MembershipSummary signalProjection(MembershipSummary summary) {
+        projectionSignal.run();
+        return summary;
     }
 
     private static MembershipEntitlement entitlement(MembershipSummary summary, String tierKey) {

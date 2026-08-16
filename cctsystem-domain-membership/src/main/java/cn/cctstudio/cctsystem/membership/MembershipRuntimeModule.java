@@ -71,7 +71,8 @@ public final class MembershipRuntimeModule implements CctModule {
                         clock,
                         context.config().membership().quoteTtlSeconds(),
                         context.config().membership().maxPurchaseDays(),
-                        context.config().membership().purchaseBlockedGroups()
+                        context.config().membership().purchaseBlockedGroups(),
+                        worker::trigger
                     )
                 );
                 projectionWorker = worker;

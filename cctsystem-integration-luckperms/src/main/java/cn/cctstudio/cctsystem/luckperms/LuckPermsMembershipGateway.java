@@ -35,7 +35,7 @@ public final class LuckPermsMembershipGateway implements MembershipPermissionGat
         if (desiredGroup != null && luckPerms.getGroupManager().getGroup(desiredGroup) == null) {
             throw new IllegalStateException("LuckPerms group does not exist: " + desiredGroup);
         }
-        return luckPerms.getUserManager().modifyUser(playerUuid, user -> {
+        return luckPerms.getUserManager().loadUser(playerUuid).thenCompose(user -> {
             user.data().clear(node -> NodeType.INHERITANCE.matches(node)
                 && normalizedManaged.contains(NodeType.INHERITANCE.cast(node).getGroupName()));
             if (desiredGroup != null) {
@@ -43,6 +43,9 @@ public final class LuckPermsMembershipGateway implements MembershipPermissionGat
                     .expiry(desiredExpiry)
                     .build());
             }
+            return luckPerms.getUserManager().saveUser(user).thenRun(() ->
+                luckPerms.getMessagingService().ifPresent(service -> service.pushUserUpdate(user))
+            );
         });
     }
 }

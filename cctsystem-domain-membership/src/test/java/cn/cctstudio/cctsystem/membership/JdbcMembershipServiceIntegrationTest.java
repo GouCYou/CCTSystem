@@ -48,6 +48,7 @@ final class JdbcMembershipServiceIntegrationTest {
     private FakePromotionService promotions;
     private JdbcMembershipStore store;
     private JdbcMembershipService service;
+    private AtomicInteger projectionSignals;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -59,6 +60,7 @@ final class JdbcMembershipServiceIntegrationTest {
         executors = new CctExecutors();
         points = new FakePointsService();
         promotions = new FakePromotionService();
+        projectionSignals = new AtomicInteger();
         store = new JdbcMembershipStore(database, executors, "membership-integration-node");
         store.syncConfiguration(TIERS).toCompletableFuture().get(5, TimeUnit.SECONDS);
         service = new JdbcMembershipService(
@@ -69,7 +71,8 @@ final class JdbcMembershipServiceIntegrationTest {
             Clock.fixed(NOW, ZoneOffset.UTC),
             60,
             365,
-            java.util.Set.of("helper", "mod", "admin", "owner")
+            java.util.Set.of("helper", "mod", "admin", "owner"),
+            projectionSignals::incrementAndGet
         );
     }
 
@@ -84,6 +87,7 @@ final class JdbcMembershipServiceIntegrationTest {
         MembershipPurchaseRequest request = request(playerUuid, "vip", UpgradeMode.NONE, "member-idem");
 
         MembershipOrderResult first = service.purchase(request).toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertEquals(1, projectionSignals.get());
         MembershipOrderResult duplicate = service.purchase(request).toCompletableFuture().get(5, TimeUnit.SECONDS);
         MembershipSummary summary = service.summary(playerUuid).toCompletableFuture().get(5, TimeUnit.SECONDS);
 

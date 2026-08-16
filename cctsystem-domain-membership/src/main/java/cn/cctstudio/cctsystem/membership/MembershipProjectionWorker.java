@@ -18,6 +18,7 @@ final class MembershipProjectionWorker {
     private final CctLogger logger;
     private final Clock clock;
     private final AtomicBoolean running = new AtomicBoolean();
+    private final AtomicBoolean rerunRequested = new AtomicBoolean();
     private volatile ScheduledFuture<?> scheduled;
 
     MembershipProjectionWorker(
@@ -50,10 +51,16 @@ final class MembershipProjectionWorker {
         }
     }
 
+    void trigger() {
+        rerunRequested.set(true);
+        executors.scheduler().execute(this::tick);
+    }
+
     private void tick() {
         if (!running.compareAndSet(false, true)) {
             return;
         }
+        rerunRequested.set(false);
         java.time.Instant now = clock.instant();
         store.reconcileExpired(now, 50)
             .thenCompose(ignored -> store.pendingProjections(now, 25))
@@ -68,6 +75,9 @@ final class MembershipProjectionWorker {
                 running.set(false);
                 if (failure != null) {
                     logger.warn("Membership permission projection pass failed", failure);
+                }
+                if (rerunRequested.get()) {
+                    executors.scheduler().execute(this::tick);
                 }
             });
     }
