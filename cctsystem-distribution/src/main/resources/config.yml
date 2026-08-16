@@ -47,7 +47,7 @@ membership:
       luck-perms-group: vip
       duration-days: 30
       price-points: 100
-      upgrade-credit-rate-bps: 10000
+      upgrade-credit-rate-bps: 8000
       display-material: GOLD_INGOT
       benefits: [专属称号, 专属每日礼包 + 一次性礼包, 可开启 4 星神秘箱, 箱子商店数量 15 个, 1.2 倍金钱获取, 5 个领地，最大 300×300, 创造服 2 个地皮, 2 只宠物，1.5 倍升级, 切换 PVP 状态, 远程末影箱, 大厅飞行]
       enabled: true
@@ -57,7 +57,7 @@ membership:
       luck-perms-group: vipp
       duration-days: 30
       price-points: 200
-      upgrade-credit-rate-bps: 10000
+      upgrade-credit-rate-bps: 8000
       display-material: DIAMOND
       benefits: [包含VIP全部权益, 箱子商店数量 20 个, 1.5 倍金钱获取, 8 个领地，最大 400×400, 创造服 3 个地皮, 3 只宠物，2.0 倍升级, 解锁高级战令, 远程铁砧, 支持跨服喊话, 每日飞行消耗 500 点]
       enabled: true
@@ -67,7 +67,7 @@ membership:
       luck-perms-group: mvp
       duration-days: 30
       price-points: 400
-      upgrade-credit-rate-bps: 10000
+      upgrade-credit-rate-bps: 8000
       display-material: EMERALD
       benefits: [包含VIP+全部权益, 可开启 5 星神秘箱, 箱子商店数量 25 个, 1.8 倍金钱获取, 12 个领地，最大 600×600, 创造服 4 个地皮, 4 只宠物，2.5 倍升级, 高级生物捕捉, 每日飞行消耗 2000 点]
       enabled: true
@@ -77,7 +77,7 @@ membership:
       luck-perms-group: mvpp
       duration-days: 30
       price-points: 800
-      upgrade-credit-rate-bps: 10000
+      upgrade-credit-rate-bps: 8000
       display-material: NETHER_STAR
       benefits: [包含MVP全部权益, 箱子商店数量 30 个, 2.0 倍金钱获取, 20 个领地，最大 1000×1000, 创造服 5 个地皮, 5 只宠物，3.0 倍升级, 最大范围生物捕捉, 无限飞行, 骑乘装饰宠物, 彩色宠物名, 匿名功能]
       enabled: true

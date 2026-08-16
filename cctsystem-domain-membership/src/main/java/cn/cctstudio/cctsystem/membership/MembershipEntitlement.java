@@ -10,6 +10,31 @@ public record MembershipEntitlement(
     Instant startsAt,
     Instant expiresAt,
     Long remainingSeconds,
-    Long resumeSequence
+    Long resumeSequence,
+    int creditBasisPoints,
+    long creditBasisSeconds,
+    Instant creditBasisAt
 ) {
+    public MembershipEntitlement(
+        UUID entitlementId,
+        MembershipTier tier,
+        EntitlementState state,
+        Instant startsAt,
+        Instant expiresAt,
+        Long remainingSeconds,
+        Long resumeSequence
+    ) {
+        this(
+            entitlementId,
+            tier,
+            state,
+            startsAt,
+            expiresAt,
+            remainingSeconds,
+            resumeSequence,
+            tier.pricePoints(),
+            tier.durationSeconds(),
+            startsAt
+        );
+    }
 }

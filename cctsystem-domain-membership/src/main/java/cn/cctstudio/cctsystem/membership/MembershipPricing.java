@@ -81,16 +81,26 @@ final class MembershipPricing {
         return (int) Math.min(Integer.MAX_VALUE, seconds);
     }
 
-    private static int credit(MembershipEntitlement active, Instant now, int maximum) {
+    static int remainingPaidValue(MembershipEntitlement active, Instant now) {
         long remaining = remainingSeconds(active, now);
-        if (remaining == 0 || maximum == 0) {
+        if (remaining == 0 || active == null || active.creditBasisPoints() <= 0
+            || active.creditBasisSeconds() <= 0) {
             return 0;
         }
-        MembershipTier oldTier = active.tier();
-        BigDecimal raw = BigDecimal.valueOf(oldTier.pricePoints())
-            .multiply(BigDecimal.valueOf(remaining))
-            .divide(BigDecimal.valueOf(oldTier.durationSeconds()), 12, RoundingMode.DOWN)
-            .multiply(BigDecimal.valueOf(oldTier.upgradeCreditRateBps()))
+        long creditedSeconds = Math.min(remaining, active.creditBasisSeconds());
+        return BigDecimal.valueOf(active.creditBasisPoints())
+            .multiply(BigDecimal.valueOf(creditedSeconds))
+            .divide(BigDecimal.valueOf(active.creditBasisSeconds()), 0, RoundingMode.FLOOR)
+            .intValueExact();
+    }
+
+    private static int credit(MembershipEntitlement active, Instant now, int maximum) {
+        int remainingPaidValue = remainingPaidValue(active, now);
+        if (remainingPaidValue == 0 || maximum == 0) {
+            return 0;
+        }
+        BigDecimal raw = BigDecimal.valueOf(remainingPaidValue)
+            .multiply(BigDecimal.valueOf(active.tier().upgradeCreditRateBps()))
             .divide(BigDecimal.valueOf(10_000), 0, RoundingMode.FLOOR);
         return Math.min(maximum, raw.intValueExact());
     }

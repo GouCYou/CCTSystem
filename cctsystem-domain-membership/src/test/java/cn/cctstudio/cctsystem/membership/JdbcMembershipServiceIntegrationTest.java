@@ -139,8 +139,8 @@ final class JdbcMembershipServiceIntegrationTest {
             .toCompletableFuture().get(5, TimeUnit.SECONDS);
 
         assertEquals(320, quote.discountedPricePoints());
-        assertEquals(50, quote.upgradeCreditPoints());
-        assertEquals(270, quote.finalPricePoints());
+        assertEquals(40, quote.upgradeCreditPoints());
+        assertEquals(280, quote.finalPricePoints());
     }
 
     @Test
@@ -198,7 +198,7 @@ final class JdbcMembershipServiceIntegrationTest {
 
     private static MembershipTierConfig tier(String key, String name, int priority, int price) {
         return new MembershipTierConfig(
-            key, name, priority, key, 30, price, 10_000,
+            key, name, priority, key, 30, price, 8_000,
             "GOLD_INGOT", List.of("测试权益"), true
         );
     }

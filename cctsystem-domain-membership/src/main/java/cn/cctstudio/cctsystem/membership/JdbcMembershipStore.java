@@ -32,6 +32,7 @@ final class JdbcMembershipStore {
     private static final String ENTITLEMENT_COLUMNS = """
         e.entitlement_id, e.state, e.starts_at, e.expires_at,
         e.remaining_seconds, e.resume_sequence,
+        e.credit_basis_points, e.credit_basis_seconds, e.credit_basis_at,
         t.tier_key, t.display_name, t.priority, t.luckperms_group,
         t.duration_days, t.price_points, t.upgrade_credit_rate_bps,
         t.display_material, t.benefits_json, t.enabled, t.config_version
@@ -508,6 +509,10 @@ final class JdbcMembershipStore {
         Instant expiry;
         if (active != null && active.tier().key().equals(order.tierKey())) {
             entitlementId = active.entitlementId();
+            int currentPaidValue = MembershipPricing.remainingPaidValue(active, now);
+            long currentRemaining = MembershipPricing.remainingSeconds(active, now);
+            int combinedPaidValue = Math.addExact(currentPaidValue, order.discountedPricePoints());
+            long combinedDuration = Math.addExact(currentRemaining, durationSeconds);
             Instant base = active.expiresAt() != null && active.expiresAt().isAfter(now)
                 ? active.expiresAt()
                 : now;
@@ -515,11 +520,15 @@ final class JdbcMembershipStore {
             try (PreparedStatement update = connection.prepareStatement("""
                 UPDATE cct_membership_entitlements
                 SET state = 'ACTIVE', expires_at = ?, remaining_seconds = NULL,
-                    resume_sequence = NULL
+                    resume_sequence = NULL, credit_basis_points = ?,
+                    credit_basis_seconds = ?, credit_basis_at = ?
                 WHERE entitlement_id = ?
                 """)) {
                 setInstant(update, 1, expiry);
-                update.setBytes(2, UuidBinary.encode(entitlementId));
+                update.setInt(2, combinedPaidValue);
+                update.setLong(3, combinedDuration);
+                setInstant(update, 4, now);
+                update.setBytes(5, UuidBinary.encode(entitlementId));
                 requireOne(update.executeUpdate(), "Membership renewal could not be applied");
             }
         } else {
@@ -537,16 +546,20 @@ final class JdbcMembershipStore {
             try (PreparedStatement insert = connection.prepareStatement("""
                 INSERT INTO cct_membership_entitlements(
                     entitlement_id, player_uuid, tier_key, state, starts_at, expires_at,
+                    credit_basis_points, credit_basis_seconds, credit_basis_at,
                     source_type, source_ref, created_by
-                ) VALUES (?, ?, ?, 'ACTIVE', ?, ?, 'PURCHASE', ?, ?)
+                ) VALUES (?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, 'PURCHASE', ?, ?)
                 """)) {
                 insert.setBytes(1, UuidBinary.encode(entitlementId));
                 insert.setBytes(2, UuidBinary.encode(order.playerUuid()));
                 insert.setString(3, order.tierKey());
                 setInstant(insert, 4, now);
                 setInstant(insert, 5, expiry);
-                insert.setString(6, orderId.toString());
-                insert.setString(7, "player:" + order.playerUuid());
+                insert.setInt(6, order.discountedPricePoints());
+                insert.setLong(7, durationSeconds);
+                setInstant(insert, 8, now);
+                insert.setString(9, orderId.toString());
+                insert.setString(10, "player:" + order.playerUuid());
                 insert.executeUpdate();
             }
         }
@@ -722,12 +735,13 @@ final class JdbcMembershipStore {
         try (PreparedStatement resume = connection.prepareStatement("""
             UPDATE cct_membership_entitlements
             SET state = 'ACTIVE', starts_at = ?, expires_at = ?,
-                remaining_seconds = NULL, resume_sequence = NULL
+                remaining_seconds = NULL, resume_sequence = NULL, credit_basis_at = ?
             WHERE entitlement_id = ? AND state = 'PAUSED'
             """)) {
             setInstant(resume, 1, now);
             setInstant(resume, 2, expiry);
-            resume.setBytes(3, UuidBinary.encode(paused.entitlementId()));
+            setInstant(resume, 3, now);
+            resume.setBytes(4, UuidBinary.encode(paused.entitlementId()));
             requireOne(resume.executeUpdate(), "Paused membership could not be resumed");
         }
         long version = setActive(connection, playerUuid, paused.entitlementId());
@@ -859,12 +873,13 @@ final class JdbcMembershipStore {
         try (PreparedStatement resume = connection.prepareStatement("""
             UPDATE cct_membership_entitlements
             SET state = 'ACTIVE', starts_at = ?, expires_at = ?,
-                remaining_seconds = NULL, resume_sequence = NULL
+                remaining_seconds = NULL, resume_sequence = NULL, credit_basis_at = ?
             WHERE entitlement_id = ? AND state = 'PAUSED'
             """)) {
             setInstant(resume, 1, now);
             setInstant(resume, 2, expiry);
-            resume.setBytes(3, UuidBinary.encode(paused.entitlementId()));
+            setInstant(resume, 3, now);
+            resume.setBytes(4, UuidBinary.encode(paused.entitlementId()));
             requireOne(resume.executeUpdate(), "Paused membership could not be resumed");
         }
         long version = setActive(connection, playerUuid, paused.entitlementId());
@@ -1027,6 +1042,7 @@ final class JdbcMembershipStore {
         Instant now
     ) throws SQLException {
         long remaining = Math.max(0, active.expiresAt().getEpochSecond() - now.getEpochSecond());
+        int remainingPaidValue = MembershipPricing.remainingPaidValue(active, now);
         long sequence;
         try (PreparedStatement query = connection.prepareStatement("""
             SELECT next_resume_sequence FROM cct_player_membership_state
@@ -1042,12 +1058,16 @@ final class JdbcMembershipStore {
         }
         try (PreparedStatement update = connection.prepareStatement("""
             UPDATE cct_membership_entitlements
-            SET state = 'PAUSED', expires_at = NULL, remaining_seconds = ?, resume_sequence = ?
+            SET state = 'PAUSED', expires_at = NULL, remaining_seconds = ?, resume_sequence = ?,
+                credit_basis_points = ?, credit_basis_seconds = ?, credit_basis_at = ?
             WHERE entitlement_id = ? AND state = 'ACTIVE'
             """)) {
             update.setLong(1, remaining);
             update.setLong(2, sequence);
-            update.setBytes(3, UuidBinary.encode(active.entitlementId()));
+            update.setInt(3, remainingPaidValue);
+            update.setLong(4, remaining);
+            setInstant(update, 5, now);
+            update.setBytes(6, UuidBinary.encode(active.entitlementId()));
             requireOne(update.executeUpdate(), "Active membership could not be paused");
         }
         try (PreparedStatement update = connection.prepareStatement("""
@@ -1067,13 +1087,18 @@ final class JdbcMembershipStore {
     )
         throws SQLException {
         long remaining = Math.max(0, active.expiresAt().getEpochSecond() - now.getEpochSecond());
+        int remainingPaidValue = MembershipPricing.remainingPaidValue(active, now);
         try (PreparedStatement update = connection.prepareStatement("""
             UPDATE cct_membership_entitlements
-            SET state = 'CONVERTED', expires_at = NULL, remaining_seconds = ?, resume_sequence = NULL
+            SET state = 'CONVERTED', expires_at = NULL, remaining_seconds = ?, resume_sequence = NULL,
+                credit_basis_points = ?, credit_basis_seconds = ?, credit_basis_at = ?
             WHERE entitlement_id = ? AND state = 'ACTIVE'
             """)) {
             update.setLong(1, remaining);
-            update.setBytes(2, UuidBinary.encode(active.entitlementId()));
+            update.setInt(2, remainingPaidValue);
+            update.setLong(3, remaining);
+            setInstant(update, 4, now);
+            update.setBytes(5, UuidBinary.encode(active.entitlementId()));
             requireOne(update.executeUpdate(), "Active membership could not be converted");
         }
         if (order.upgradeCreditPoints() > 0) {
@@ -1087,11 +1112,13 @@ final class JdbcMembershipStore {
                 insert.setBytes(1, UuidBinary.encode(order.orderId()));
                 insert.setBytes(2, UuidBinary.encode(active.entitlementId()));
                 insert.setString(3, active.tier().key());
-                insert.setInt(4, active.tier().pricePoints());
-                insert.setLong(5, active.tier().durationSeconds());
+                insert.setInt(4, remainingPaidValue);
+                insert.setLong(5, remaining);
                 insert.setLong(6, remaining);
                 insert.setInt(7, active.tier().upgradeCreditRateBps());
-                insert.setBigDecimal(8, java.math.BigDecimal.valueOf(order.upgradeCreditPoints()));
+                insert.setBigDecimal(8, java.math.BigDecimal.valueOf(remainingPaidValue)
+                    .multiply(java.math.BigDecimal.valueOf(active.tier().upgradeCreditRateBps()))
+                    .divide(java.math.BigDecimal.valueOf(10_000), 6, java.math.RoundingMode.DOWN));
                 insert.setInt(9, order.upgradeCreditPoints());
                 insert.executeUpdate();
             }
@@ -1428,7 +1455,8 @@ final class JdbcMembershipStore {
     private OrderRow orderForUpdate(Connection connection, UUID orderId) throws SQLException {
         try (PreparedStatement query = connection.prepareStatement("""
             SELECT order_id, player_uuid, tier_key, months, upgrade_mode, status,
-                   duration_days_snapshot, final_price_points, upgrade_credit_points,
+                   duration_days_snapshot, discounted_price_points, final_price_points,
+                   upgrade_credit_points,
                    previous_entitlement_id
             FROM cct_membership_orders WHERE order_id = ? FOR UPDATE
             """)) {
@@ -1445,6 +1473,7 @@ final class JdbcMembershipStore {
                     UpgradeMode.valueOf(result.getString("upgrade_mode")),
                     MembershipOrderStatus.valueOf(result.getString("status")),
                     result.getInt("duration_days_snapshot"),
+                    result.getInt("discounted_price_points"),
                     result.getInt("final_price_points"),
                     result.getInt("upgrade_credit_points"),
                     nullableUuid(result, "previous_entitlement_id")
@@ -1461,7 +1490,10 @@ final class JdbcMembershipStore {
             nullableInstant(result, "starts_at"),
             nullableInstant(result, "expires_at"),
             nullableLong(result, "remaining_seconds"),
-            nullableLong(result, "resume_sequence")
+            nullableLong(result, "resume_sequence"),
+            result.getInt("credit_basis_points"),
+            result.getLong("credit_basis_seconds"),
+            nullableInstant(result, "credit_basis_at")
         );
     }
 
@@ -1601,6 +1633,7 @@ final class JdbcMembershipStore {
         UpgradeMode upgradeMode,
         MembershipOrderStatus status,
         int durationDaysSnapshot,
+        int discountedPricePoints,
         int finalPricePoints,
         int upgradeCreditPoints,
         UUID previousEntitlementId

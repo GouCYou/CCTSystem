@@ -25,7 +25,8 @@ final class MigrationRunner {
         new Migration(4, "redeem_codes", "/db/migration/V4__redeem_codes.sql"),
         new Migration(5, "nickname_profiles", "/db/migration/V5__nickname_profiles.sql"),
         new Migration(6, "delivery_rewards", "/db/migration/V6__delivery_rewards.sql"),
-        new Migration(7, "network_vanish", "/db/migration/V7__network_vanish.sql")
+        new Migration(7, "network_vanish", "/db/migration/V7__network_vanish.sql"),
+        new Migration(8, "membership_credit_basis", "/db/migration/V8__membership_credit_basis.sql")
     );
 
     private final DataSource dataSource;

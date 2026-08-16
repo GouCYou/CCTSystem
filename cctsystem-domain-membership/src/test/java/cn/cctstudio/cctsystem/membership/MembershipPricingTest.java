@@ -15,10 +15,11 @@ final class MembershipPricingTest {
     private static final MembershipTier MVP = tier("mvp", 300, 400);
 
     @Test
-    void appliesPromotionBeforeUpgradeCredit() {
+    void appliesPromotionAndCreditsTheOldActualPurchaseValue() {
         MembershipEntitlement active = new MembershipEntitlement(
             UUID.randomUUID(), VIP, EntitlementState.ACTIVE, NOW.minusSeconds(100),
-            NOW.plusSeconds(15L * 86_400L), null, null
+            NOW.plusSeconds(15L * 86_400L), null, null,
+            80, 30L * 86_400L, NOW.minusSeconds(15L * 86_400L)
         );
         Promotion promotion = new Promotion(
             UUID.randomUUID(), "八折", null, 2_000, NOW.minusSeconds(1), NOW.plusSeconds(3600), 1, "ACTIVE"
@@ -30,8 +31,8 @@ final class MembershipPricingTest {
 
         assertEquals(400, quote.basePricePoints());
         assertEquals(320, quote.discountedPricePoints());
-        assertEquals(50, quote.upgradeCreditPoints());
-        assertEquals(270, quote.finalPricePoints());
+        assertEquals(32, quote.upgradeCreditPoints());
+        assertEquals(288, quote.finalPricePoints());
     }
 
     @Test
@@ -49,8 +50,8 @@ final class MembershipPricingTest {
         );
 
         assertEquals(267, quote.discountedPricePoints());
-        assertEquals(3, quote.upgradeCreditPoints());
-        assertEquals(264, quote.finalPricePoints());
+        assertEquals(2, quote.upgradeCreditPoints());
+        assertEquals(265, quote.finalPricePoints());
     }
 
     @Test
@@ -74,7 +75,7 @@ final class MembershipPricingTest {
 
     private static MembershipTier tier(String key, int priority, int price) {
         return new MembershipTier(
-            key, key.toUpperCase(), priority, key, 30, price, 10_000,
+            key, key.toUpperCase(), priority, key, 30, price, 8_000,
             "GOLD_INGOT", List.of(), true, 1
         );
     }
