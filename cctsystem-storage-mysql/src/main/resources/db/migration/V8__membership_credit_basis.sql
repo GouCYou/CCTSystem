@@ -7,7 +7,7 @@ UPDATE cct_membership_entitlements e
 JOIN (
     SELECT
         resulting_entitlement_id,
-        SUM(discounted_price_points) AS paid_points,
+        SUM(final_price_points) AS paid_points,
         SUM(duration_days_snapshot * months * 86400) AS paid_seconds
     FROM cct_membership_orders
     WHERE status = 'COMPLETED' AND resulting_entitlement_id IS NOT NULL
