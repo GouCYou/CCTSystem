@@ -144,6 +144,28 @@ final class JdbcMembershipServiceIntegrationTest {
     }
 
     @Test
+    void chainedUpgradeKeepsPromotionalPriceBeforePriorRankCredit() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        service.purchase(request(playerUuid, "vip", UpgradeMode.NONE, "chain-vip"))
+            .toCompletableFuture().get(5, TimeUnit.SECONDS);
+        promotions.active = new Promotion(
+            UUID.randomUUID(), "八折", null, 2_000,
+            NOW.minusSeconds(10), NOW.plusSeconds(3600), 10, "ACTIVE"
+        );
+
+        MembershipOrderResult vipPlus = service.purchase(
+            request(playerUuid, "vip_plus", UpgradeMode.CREDIT, "chain-vip-plus")
+        ).toCompletableFuture().get(5, TimeUnit.SECONDS);
+        MembershipQuote mvp = service.quote(playerUuid, "mvp", 1, UpgradeMode.CREDIT)
+            .toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+        assertEquals(80, vipPlus.finalPricePoints());
+        assertEquals(320, mvp.discountedPricePoints());
+        assertEquals(128, mvp.upgradeCreditPoints());
+        assertEquals(192, mvp.finalPricePoints());
+    }
+
+    @Test
     void requestedPointDebitBecomesReviewRequiredAfterRestart() throws Exception {
         UUID playerUuid = UUID.randomUUID();
         MembershipQuote quote = service.quote(playerUuid, "vip", 1, UpgradeMode.NONE)

@@ -511,7 +511,7 @@ final class JdbcMembershipStore {
             entitlementId = active.entitlementId();
             int currentPaidValue = MembershipPricing.remainingPaidValue(active, now);
             long currentRemaining = MembershipPricing.remainingSeconds(active, now);
-            int combinedPaidValue = Math.addExact(currentPaidValue, order.finalPricePoints());
+            int combinedPaidValue = Math.addExact(currentPaidValue, order.discountedPricePoints());
             long combinedDuration = Math.addExact(currentRemaining, durationSeconds);
             Instant base = active.expiresAt() != null && active.expiresAt().isAfter(now)
                 ? active.expiresAt()
@@ -555,7 +555,7 @@ final class JdbcMembershipStore {
                 insert.setString(3, order.tierKey());
                 setInstant(insert, 4, now);
                 setInstant(insert, 5, expiry);
-                insert.setInt(6, order.finalPricePoints());
+                insert.setInt(6, order.discountedPricePoints());
                 insert.setLong(7, durationSeconds);
                 setInstant(insert, 8, now);
                 insert.setString(9, orderId.toString());
