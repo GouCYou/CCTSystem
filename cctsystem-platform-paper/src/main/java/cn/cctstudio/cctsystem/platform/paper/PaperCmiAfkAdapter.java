@@ -65,12 +65,16 @@ final class PaperCmiAfkAdapter {
                 listener,
                 EventPriority.HIGHEST,
                 (ignored, event) -> {
+                    // CMI keeps several custom events on a shared HandlerList. Bukkit can
+                    // therefore route sibling CMI events (for example balance changes) to
+                    // this executor even though it was registered for CMIAfkEnterEvent.
+                    if (!enterEvent.isInstance(event)) return;
                     try {
                         Player player = (Player) eventPlayer.invoke(event);
                         if (vanished.test(player.getUniqueId())) {
                             ((Cancellable) event).setCancelled(true);
                         }
-                    } catch (IllegalAccessException | InvocationTargetException exception) {
+                    } catch (IllegalAccessException | InvocationTargetException | RuntimeException exception) {
                         logger.warn("Unable to inspect CMI AFK event", exception);
                     }
                 },

@@ -85,7 +85,11 @@ final class PaperAntiRedstoneAdapter implements AutoCloseable {
                 true,
                 loader
             );
-            Method getInstance = injector.getClass().getMethod("getInstance", Class.class);
+            // Guice's concrete InjectorImpl is package-private. Reflecting a public
+            // method from that implementation still fails Java access checks, so invoke
+            // the method as declared by Guice's public Injector interface instead.
+            Class<?> injectorInterface = Class.forName("com.google.inject.Injector", true, loader);
+            Method getInstance = injectorInterface.getMethod("getInstance", Class.class);
             Object decisionService = getInstance.invoke(injector, decisionInterface);
             Field notificationField = decisionService.getClass().getDeclaredField("notificationService");
             notificationField.setAccessible(true);
