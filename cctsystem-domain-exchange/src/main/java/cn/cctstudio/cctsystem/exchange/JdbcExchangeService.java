@@ -88,6 +88,24 @@ final class JdbcExchangeService implements ExchangeService {
                 : CompletableFuture.completedFuture(prepared.existingResult()));
     }
 
+    @Override
+    public CompletionStage<Boolean> grantSocialBindingReward(UUID playerUuid) {
+        return store.claimSocialCoinReward(playerUuid).thenCompose(claimed -> {
+            if (!claimed) return CompletableFuture.completedFuture(false);
+            return currency.deposit(playerUuid, new BigDecimal("1000.00"))
+                .handle(GatewayOutcome<CurrencyMutationResult>::new)
+                .thenCompose(outcome -> {
+                    if (outcome.failure() != null || !outcome.value().successful()) {
+                        return store.retrySocialCoinReward(playerUuid).thenCompose(ignored ->
+                            CompletableFuture.failedFuture(new ExchangeException(
+                                "SOCIAL_COIN_REWARD_FAILED", "Could not deliver social coin reward", true
+                            )));
+                    }
+                    return store.completeSocialCoinReward(playerUuid).thenApply(ignored -> true);
+                });
+        });
+    }
+
     private CompletionStage<ExchangeResult> withdraw(
         ExchangeRequest request,
         PreparedExchange prepared

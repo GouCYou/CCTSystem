@@ -120,12 +120,20 @@ final class JdbcMembershipStore {
         });
     }
 
-    CompletionStage<MembershipSummary> reconcileAndSummary(UUID playerUuid, Instant now) {
+    CompletionStage<MembershipSummary> reconcileAndSummary(
+        UUID playerUuid,
+        Instant now,
+        boolean accessBlocked,
+        boolean clearManagedGroups
+    ) {
         return async(() -> {
             try (Connection connection = database.connection()) {
                 return inTransaction(connection, () -> {
                     lockState(connection, playerUuid);
                     reconcileLocked(connection, playerUuid, now);
+                    reconcileAccessLocked(
+                        connection, playerUuid, now, accessBlocked, clearManagedGroups
+                    );
                     return readSummary(connection, playerUuid, now);
                 });
             }
@@ -163,6 +171,156 @@ final class JdbcMembershipStore {
                 });
             }
         });
+    }
+
+    CompletionStage<Boolean> sociallyBound(UUID playerUuid) {
+        return async(() -> {
+            String uuid = playerUuid.toString();
+            try (Connection connection = database.connection();
+                 PreparedStatement query = connection.prepareStatement("""
+                    SELECT EXISTS(
+                        SELECT 1 FROM qqbotauth_bindings
+                        WHERE minecraft_uuid = ? AND verification_status = 'VERIFIED'
+                    ) OR EXISTS(
+                        SELECT 1 FROM qqbotauth_discord_bindings WHERE minecraft_uuid = ?
+                    )
+                    """)) {
+                query.setString(1, uuid);
+                query.setString(2, uuid);
+                try (ResultSet result = query.executeQuery()) {
+                    return result.next() && result.getBoolean(1);
+                }
+            }
+        });
+    }
+
+    CompletionStage<MembershipSummary> grantSocialBindingVip(UUID playerUuid, Instant now) {
+        return async(() -> {
+            try (Connection connection = database.connection()) {
+                return inTransaction(connection, () -> grantSocialBindingVipLocked(connection, playerUuid, now));
+            }
+        });
+    }
+
+    private MembershipSummary grantSocialBindingVipLocked(
+        Connection connection,
+        UUID playerUuid,
+        Instant now
+    ) throws SQLException {
+        try (PreparedStatement insert = connection.prepareStatement("""
+            INSERT INTO cct_social_binding_rewards(player_uuid)
+            VALUES (?) ON DUPLICATE KEY UPDATE player_uuid = player_uuid
+            """)) {
+            insert.setBytes(1, UuidBinary.encode(playerUuid));
+            insert.executeUpdate();
+        }
+        try (PreparedStatement lock = connection.prepareStatement("""
+            SELECT vip_status FROM cct_social_binding_rewards WHERE player_uuid = ? FOR UPDATE
+            """)) {
+            lock.setBytes(1, UuidBinary.encode(playerUuid));
+            try (ResultSet result = lock.executeQuery()) {
+                if (!result.next()) throw new SQLException("Social reward row is unavailable");
+                if ("COMPLETED".equals(result.getString(1))) {
+                    lockState(connection, playerUuid);
+                    reconcileLocked(connection, playerUuid, now);
+                    return readSummary(connection, playerUuid, now);
+                }
+            }
+        }
+
+        lockState(connection, playerUuid);
+        reconcileLocked(connection, playerUuid, now);
+        MembershipTier vip = findTier(connection, "vip", true);
+        MembershipEntitlement active = readActive(connection, playerUuid).orElse(null);
+        MembershipEntitlement existingVip = readEntitlementByTier(connection, playerUuid, "vip").orElse(null);
+        long giftSeconds = java.time.Duration.ofDays(7).toSeconds();
+
+        if (existingVip != null && existingVip.state() == EntitlementState.ACTIVE) {
+            Instant base = existingVip.expiresAt().isAfter(now) ? existingVip.expiresAt() : now;
+            Instant expiry = base.plusSeconds(giftSeconds);
+            updateEntitlementExpiry(connection, existingVip.entitlementId(), expiry);
+            long version = incrementStateVersion(connection, playerUuid);
+            upsertProjection(connection, playerUuid, vip, expiry, version, now);
+        } else if (existingVip != null && existingVip.state() == EntitlementState.PAUSED) {
+            updatePausedRemaining(
+                connection,
+                existingVip.entitlementId(),
+                Math.addExact(existingVip.remainingSeconds(), giftSeconds)
+            );
+        } else if (active == null) {
+            UUID entitlementId = UuidV7.create(now);
+            Instant expiry = now.plusSeconds(giftSeconds);
+            insertSocialVip(connection, playerUuid, entitlementId, "ACTIVE", now, expiry, null, null);
+            long version = setActive(connection, playerUuid, entitlementId);
+            upsertProjection(connection, playerUuid, vip, expiry, version, now);
+        } else {
+            long sequence = nextResumeSequence(connection, playerUuid);
+            insertSocialVip(
+                connection, playerUuid, UuidV7.create(now), "PAUSED", now,
+                null, giftSeconds, sequence
+            );
+        }
+
+        try (PreparedStatement update = connection.prepareStatement("""
+            UPDATE cct_social_binding_rewards
+            SET vip_status = 'COMPLETED', vip_delivered_at = ?
+            WHERE player_uuid = ?
+            """)) {
+            setInstant(update, 1, now);
+            update.setBytes(2, UuidBinary.encode(playerUuid));
+            requireOne(update.executeUpdate(), "Social VIP reward was not completed");
+        }
+        return readSummary(connection, playerUuid, now);
+    }
+
+    private void insertSocialVip(
+        Connection connection,
+        UUID playerUuid,
+        UUID entitlementId,
+        String state,
+        Instant startsAt,
+        Instant expiresAt,
+        Long remainingSeconds,
+        Long resumeSequence
+    ) throws SQLException {
+        try (PreparedStatement insert = connection.prepareStatement("""
+            INSERT INTO cct_membership_entitlements(
+                entitlement_id, player_uuid, tier_key, state, starts_at, expires_at,
+                remaining_seconds, resume_sequence, credit_basis_points, credit_basis_seconds,
+                source_type, source_ref, created_by
+            ) VALUES (?, ?, 'vip', ?, ?, ?, ?, ?, 0, 0, 'SOCIAL_BINDING', 'first-binding', 'system:social-binding')
+            """)) {
+            insert.setBytes(1, UuidBinary.encode(entitlementId));
+            insert.setBytes(2, UuidBinary.encode(playerUuid));
+            insert.setString(3, state);
+            nullableInstant(insert, 4, startsAt);
+            nullableInstant(insert, 5, expiresAt);
+            if (remainingSeconds == null) insert.setNull(6, Types.BIGINT); else insert.setLong(6, remainingSeconds);
+            if (resumeSequence == null) insert.setNull(7, Types.BIGINT); else insert.setLong(7, resumeSequence);
+            insert.executeUpdate();
+        }
+    }
+
+    private long nextResumeSequence(Connection connection, UUID playerUuid) throws SQLException {
+        long sequence;
+        try (PreparedStatement query = connection.prepareStatement("""
+            SELECT next_resume_sequence FROM cct_player_membership_state
+            WHERE player_uuid = ? FOR UPDATE
+            """)) {
+            query.setBytes(1, UuidBinary.encode(playerUuid));
+            try (ResultSet result = query.executeQuery()) {
+                if (!result.next()) throw new SQLException("Membership resume sequence is unavailable");
+                sequence = result.getLong(1);
+            }
+        }
+        try (PreparedStatement update = connection.prepareStatement("""
+            UPDATE cct_player_membership_state SET next_resume_sequence = next_resume_sequence + 1
+            WHERE player_uuid = ?
+            """)) {
+            update.setBytes(1, UuidBinary.encode(playerUuid));
+            requireOne(update.executeUpdate(), "Membership resume sequence could not be advanced");
+        }
+        return sequence;
     }
 
     CompletionStage<PreparedMembershipOrder> prepare(
@@ -612,8 +770,9 @@ final class JdbcMembershipStore {
         try (PreparedStatement insert = connection.prepareStatement("""
             INSERT INTO cct_membership_entitlements(
                 entitlement_id, player_uuid, tier_key, state, starts_at, expires_at,
+                credit_basis_points, credit_basis_seconds, credit_basis_at,
                 source_type, source_ref, created_by
-            ) VALUES (?, ?, ?, 'ACTIVE', ?, ?, 'ADMIN', ?, ?)
+            ) VALUES (?, ?, ?, 'ACTIVE', ?, ?, 0, 0, NULL, 'ADMIN', ?, ?)
             """)) {
             insert.setBytes(1, UuidBinary.encode(entitlementId));
             insert.setBytes(2, UuidBinary.encode(request.playerUuid()));
@@ -886,6 +1045,47 @@ final class JdbcMembershipStore {
         upsertProjection(connection, playerUuid, paused.tier(), expiry, version, now);
     }
 
+    private void reconcileAccessLocked(
+        Connection connection,
+        UUID playerUuid,
+        Instant now,
+        boolean accessBlocked,
+        boolean clearManagedGroups
+    ) throws SQLException {
+        UUID marker = readAccessPauseMarker(connection, playerUuid);
+        MembershipEntitlement active = readActive(connection, playerUuid).orElse(null);
+        if (accessBlocked) {
+            if (active == null) {
+                if (clearManagedGroups) {
+                    long version = setActive(connection, playerUuid, null);
+                    upsertProjection(connection, playerUuid, null, null, version, now);
+                }
+                return;
+            }
+            pauseActive(connection, playerUuid, active, now);
+            long version = setActive(connection, playerUuid, null);
+            if (marker == null) {
+                setAccessPauseMarker(connection, playerUuid, active.entitlementId());
+            }
+            upsertProjection(connection, playerUuid, null, null, version, now);
+            return;
+        }
+        if (marker == null) return;
+        if (active != null && active.entitlementId().equals(marker)) {
+            setAccessPauseMarker(connection, playerUuid, null);
+            return;
+        }
+        MembershipEntitlement pausedByAccess = readEntitlementById(connection, marker).orElse(null);
+        if (pausedByAccess == null || pausedByAccess.state() != EntitlementState.PAUSED) {
+            setAccessPauseMarker(connection, playerUuid, null);
+            return;
+        }
+        if (active == null) {
+            resumeEntitlement(connection, playerUuid, pausedByAccess, now);
+            setAccessPauseMarker(connection, playerUuid, null);
+        }
+    }
+
     private MembershipSummary readSummary(Connection connection, UUID playerUuid, Instant now)
         throws SQLException {
         MembershipEntitlement active = readActive(connection, playerUuid).orElse(null);
@@ -956,6 +1156,24 @@ final class JdbcMembershipStore {
         }
     }
 
+    private Optional<MembershipEntitlement> readEntitlementById(
+        Connection connection,
+        UUID entitlementId
+    ) throws SQLException {
+        try (PreparedStatement query = connection.prepareStatement("""
+            SELECT %s
+            FROM cct_membership_entitlements e
+            JOIN cct_membership_tiers t ON t.tier_key = e.tier_key
+            WHERE e.entitlement_id = ?
+            LIMIT 1 FOR UPDATE
+            """.formatted(ENTITLEMENT_COLUMNS))) {
+            query.setBytes(1, UuidBinary.encode(entitlementId));
+            try (ResultSet result = query.executeQuery()) {
+                return result.next() ? Optional.of(mapEntitlement(result)) : Optional.empty();
+            }
+        }
+    }
+
     private Optional<MembershipEntitlement> readNextPaused(Connection connection, UUID playerUuid)
         throws SQLException {
         try (PreparedStatement query = connection.prepareStatement("""
@@ -1009,6 +1227,39 @@ final class JdbcMembershipStore {
                     throw new SQLException("Membership state row could not be locked");
                 }
             }
+        }
+    }
+
+    private UUID readAccessPauseMarker(Connection connection, UUID playerUuid) throws SQLException {
+        try (PreparedStatement query = connection.prepareStatement("""
+            SELECT access_paused_entitlement_id
+            FROM cct_player_membership_state
+            WHERE player_uuid = ? FOR UPDATE
+            """)) {
+            query.setBytes(1, UuidBinary.encode(playerUuid));
+            try (ResultSet result = query.executeQuery()) {
+                if (!result.next()) {
+                    throw new SQLException("Membership access-pause marker is unavailable");
+                }
+                byte[] encoded = result.getBytes(1);
+                return encoded == null ? null : UuidBinary.decode(encoded);
+            }
+        }
+    }
+
+    private void setAccessPauseMarker(
+        Connection connection,
+        UUID playerUuid,
+        UUID entitlementId
+    ) throws SQLException {
+        try (PreparedStatement update = connection.prepareStatement("""
+            UPDATE cct_player_membership_state
+            SET access_paused_entitlement_id = ?
+            WHERE player_uuid = ?
+            """)) {
+            nullableUuid(update, 1, entitlementId);
+            update.setBytes(2, UuidBinary.encode(playerUuid));
+            requireOne(update.executeUpdate(), "Membership access-pause marker could not be updated");
         }
     }
 

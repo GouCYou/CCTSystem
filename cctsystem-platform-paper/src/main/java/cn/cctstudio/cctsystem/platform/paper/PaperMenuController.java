@@ -23,6 +23,7 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
     private final CctLogger logger;
     private final PaperMessages messages;
     private final PaperNetworkChat networkChat;
+    private final PaperRechargeMenu recharge;
 
     PaperMenuController(
         PaperMembershipMenu memberships,
@@ -31,7 +32,8 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
         PlatformTaskExecutor platformTasks,
         CctLogger logger,
         PaperMessages messages,
-        PaperNetworkChat networkChat
+        PaperNetworkChat networkChat,
+        PaperRechargeMenu recharge
     ) {
         this.memberships = memberships;
         this.exchange = exchange;
@@ -40,6 +42,7 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
         this.logger = logger;
         this.messages = messages;
         this.networkChat = networkChat;
+        this.recharge = recharge;
     }
 
     @Override
@@ -70,6 +73,10 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
         }
         if (arguments[0].equalsIgnoreCase("vip")) {
             memberships.openMemberships(player);
+            return true;
+        }
+        if (arguments[0].equalsIgnoreCase("recharge")) {
+            recharge.open(player);
             return true;
         }
         if (arguments[0].equalsIgnoreCase("exchange")) {
@@ -112,7 +119,7 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
         String[] arguments
     ) {
         if (arguments.length == 1) {
-            return List.of("help", "me", "vip", "exchange", "redeem", "shout");
+            return List.of("help", "me", "vip", "recharge", "exchange", "redeem", "shout");
         }
         if (arguments.length == 2 && arguments[0].equalsIgnoreCase("exchange")) {
             return List.of("1", "10", "100", "max");

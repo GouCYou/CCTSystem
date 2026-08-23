@@ -9,6 +9,7 @@ import cn.cctstudio.cctsystem.contract.PlatformType;
 import cn.cctstudio.cctsystem.core.CctRuntime;
 import cn.cctstudio.cctsystem.core.config.CctConfig;
 import cn.cctstudio.cctsystem.core.config.ConfigLoader;
+import cn.cctstudio.cctsystem.core.config.MembershipTierConfig;
 import cn.cctstudio.cctsystem.identity.IdentityModule;
 import cn.cctstudio.cctsystem.identity.IdentityProvider;
 import cn.cctstudio.cctsystem.storage.mysql.DatabaseManager;
@@ -39,6 +40,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.Duration;
+import java.util.Comparator;
+import java.util.Locale;
 import java.util.Map;
 import java.util.HashSet;
 import java.util.Set;
@@ -49,6 +52,9 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.luckperms.api.LuckPerms;
 import net.luckperms.api.LuckPermsProvider;
+import net.luckperms.api.model.group.Group;
+import net.luckperms.api.model.user.User;
+import net.luckperms.api.node.NodeType;
 import org.slf4j.Logger;
 
 @Plugin(
@@ -132,7 +138,6 @@ public final class VelocityBootstrap {
                     vanished.add(playerUuid);
                 } else {
                     vanished.remove(playerUuid);
-                    restoreTab(playerUuid);
                 }
                 refreshVanishTab();
                 return;
@@ -152,6 +157,13 @@ public final class VelocityBootstrap {
                 if (rendered.isBlank() || rendered.length() > 4096) return;
                 if (!connection.getPlayer().hasPermission("cctsystem.shout")) return;
                 if (!acquireShoutCooldown(connection.getPlayer(), cooldownMessage)) return;
+                Component component = LEGACY.deserialize(rendered);
+                proxy.getAllPlayers().forEach(player -> player.sendMessage(component));
+                return;
+            }
+            if ("SECURITY_ALERT_V1".equals(type)) {
+                String rendered = input.readUTF();
+                if (rendered.isBlank() || rendered.length() > 4096) return;
                 Component component = LEGACY.deserialize(rendered);
                 proxy.getAllPlayers().forEach(player -> player.sendMessage(component));
                 return;
@@ -331,10 +343,12 @@ public final class VelocityBootstrap {
             ObjectNode result = JSON.createObjectNode();
             result.put("online", proxy.getPlayer(playerUuid).isPresent()
                 && !vanished.contains(playerUuid));
-            result.put("primaryGroup", user.getPrimaryGroup());
+            String primaryGroup = profilePrimaryGroup(luckPerms, user, membershipGroups());
+            result.put("primaryGroup", primaryGroup);
             String customTitle = user.getCachedData().getMetaData().getMetaValue("cct-title");
-            String prefix = customTitle == null
-                ? user.getCachedData().getMetaData().getPrefix()
+            Group group = luckPerms.getGroupManager().getGroup(primaryGroup);
+            String prefix = customTitle == null || customTitle.isBlank()
+                ? group == null ? null : group.getCachedData().getMetaData().getPrefix()
                 : customTitle;
             if (prefix == null || prefix.isBlank()) {
                 result.putNull("title");
@@ -345,27 +359,48 @@ public final class VelocityBootstrap {
         });
     }
 
+    private Set<String> membershipGroups() {
+        CctRuntime existing = runtime;
+        if (existing == null) return Set.of();
+        return existing.config().membership().tiers().stream()
+            .map(MembershipTierConfig::luckPermsGroup)
+            .map(group -> group.toLowerCase(Locale.ROOT))
+            .collect(java.util.stream.Collectors.toUnmodifiableSet());
+    }
+
+    static String profilePrimaryGroup(LuckPerms luckPerms, User user, Set<String> membershipGroups) {
+        Set<String> managed = membershipGroups.stream()
+            .map(group -> group.toLowerCase(Locale.ROOT))
+            .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        Set<String> candidates = new HashSet<>();
+        String reportedPrimary = user.getPrimaryGroup().toLowerCase(Locale.ROOT);
+        if (!managed.contains(reportedPrimary)) {
+            candidates.add(reportedPrimary);
+        }
+        user.getNodes(NodeType.INHERITANCE).stream()
+            .filter(node -> node.getValue() && !node.hasExpired())
+            .map(node -> node.getGroupName().toLowerCase(Locale.ROOT))
+            .filter(group -> !managed.contains(group))
+            .forEach(candidates::add);
+        return candidates.stream()
+            .max(Comparator.<String>comparingInt(group -> groupWeight(luckPerms, group))
+                .thenComparing(Comparator.naturalOrder()))
+            .orElse("default");
+    }
+
+    private static int groupWeight(LuckPerms luckPerms, String groupName) {
+        Group group = luckPerms.getGroupManager().getGroup(groupName);
+        return group == null ? Integer.MIN_VALUE : group.getWeight().orElse(0);
+    }
+
     private void refreshVanishTab() {
         for (Player viewer : proxy.getAllPlayers()) {
             for (UUID hidden : vanished) {
-                if (!viewer.getUniqueId().equals(hidden)) {
+                if (!viewer.getUniqueId().equals(hidden)
+                    && !viewer.hasPermission("cctsystem.vanish.see")) {
                     viewer.getTabList().removeEntry(hidden);
                 }
             }
         }
-    }
-
-    private void restoreTab(UUID playerUuid) {
-        proxy.getPlayer(playerUuid).ifPresent(target -> {
-            for (Player viewer : proxy.getAllPlayers()) {
-                if (viewer.getTabList().containsEntry(playerUuid)) continue;
-                viewer.getTabList().addEntry(viewer.getTabList().buildEntry(
-                    target.getGameProfile(),
-                    Component.text(target.getUsername()),
-                    (int) Math.min(Integer.MAX_VALUE, target.getPing()),
-                    0
-                ));
-            }
-        });
     }
 }

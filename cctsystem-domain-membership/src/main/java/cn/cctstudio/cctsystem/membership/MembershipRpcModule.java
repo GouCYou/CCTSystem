@@ -26,6 +26,8 @@ public final class MembershipRpcModule implements CctModule {
     public static final String MENU_OPERATION = "membership.menu";
     public static final String QUOTE_OPERATION = "membership.quote";
     public static final String PURCHASE_OPERATION = "membership.purchase";
+    public static final String ADMIN_OPERATION = "membership.admin";
+    public static final String SOCIAL_REWARD_OPERATION = "membership.social-binding-reward";
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final ModuleDescriptor DESCRIPTOR = new ModuleDescriptor(
         "membership-rpc",
@@ -56,6 +58,19 @@ public final class MembershipRpcModule implements CctModule {
         ));
         router.register(QUOTE_OPERATION, payload -> mapErrors(quote(payload, service)));
         router.registerCall(PURCHASE_OPERATION, call -> mapErrors(purchase(call, service)));
+        router.register(ADMIN_OPERATION, payload -> mapErrors(
+            service.admin(adminRequest(payload)).thenApply(MembershipRpcModule::summaryJson)
+        ));
+        router.registerCall(SOCIAL_REWARD_OPERATION, call -> {
+            if (call.idempotencyKey() == null || call.idempotencyKey().isBlank()) throw invalidRequest();
+            return mapErrors(service.grantSocialBindingReward(requireUuid(call.payload()))
+                .thenApply(summary -> {
+                    ObjectNode result = JSON.createObjectNode();
+                    result.put("delivered", true);
+                    result.set("membership", summaryJson(summary));
+                    return result;
+                }));
+        });
         return CompletableFuture.completedFuture(null);
     }
 
@@ -86,6 +101,26 @@ public final class MembershipRpcModule implements CctModule {
             call.idempotencyKey(),
             requireText(payload, "origin", 32)
         )).thenApply(MembershipRpcModule::resultJson);
+    }
+
+    private static AdminMembershipRequest adminRequest(JsonNode payload) {
+        try {
+            String tierKey = payload.path("tierKey").isNull() ? null
+                : requireText(payload, "tierKey", 64);
+            java.time.Instant expiresAt = payload.path("expiresAt").isNull() ? null
+                : java.time.Instant.parse(requireText(payload, "expiresAt", 40));
+            return new AdminMembershipRequest(
+                AdminMembershipAction.valueOf(requireText(payload, "action", 32)),
+                requireUuid(payload),
+                tierKey,
+                payload.path("days").asInt(-1),
+                expiresAt,
+                requireText(payload, "actor", 80),
+                requireText(payload, "reason", 255)
+            );
+        } catch (IllegalArgumentException exception) {
+            throw invalidRequest();
+        }
     }
 
     private static ArrayNode catalogJson(java.util.List<MembershipTier> tiers) {

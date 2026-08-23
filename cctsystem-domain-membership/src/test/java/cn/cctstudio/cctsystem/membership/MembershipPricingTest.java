@@ -55,6 +55,22 @@ final class MembershipPricingTest {
     }
 
     @Test
+    void adminGrantedTimeNeverProducesUpgradeCredit() {
+        MembershipEntitlement adminGranted = new MembershipEntitlement(
+            UUID.randomUUID(), VIP, EntitlementState.ACTIVE, NOW,
+            NOW.plusSeconds(30L * 86_400L), null, null,
+            0, 0, null
+        );
+
+        MembershipQuote quote = MembershipPricing.quote(
+            MVP, 1, UpgradeMode.CREDIT, adminGranted, 100, Promotion.none(), NOW, 60
+        );
+
+        assertEquals(0, quote.upgradeCreditPoints());
+        assertEquals(400, quote.finalPricePoints());
+    }
+
+    @Test
     void forbidsPurchasingBelowPausedHighestTier() {
         MembershipException exception = assertThrows(MembershipException.class, () ->
             MembershipPricing.quote(VIP, 1, UpgradeMode.NONE, null, 300, Promotion.none(), NOW, 60)

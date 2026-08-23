@@ -48,4 +48,27 @@ final class PaperNetworkChat {
             player.sendMessage(messages.component("chat.shout-failed"));
         }
     }
+
+    void broadcastSecurityAlert(String message) {
+        String value = message == null ? "" : message.strip();
+        if (value.isEmpty() || value.length() > 4096) {
+            plugin.getLogger().warning("Skipped invalid CCTSystem security alert");
+            return;
+        }
+        Player carrier = plugin.getServer().getOnlinePlayers().stream().findFirst().orElse(null);
+        if (carrier == null) {
+            plugin.getLogger().warning("Security alert could not cross the proxy because no player is online");
+            return;
+        }
+        try {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            try (DataOutputStream output = new DataOutputStream(bytes)) {
+                output.writeUTF("SECURITY_ALERT_V1");
+                output.writeUTF(value);
+            }
+            carrier.sendPluginMessage(plugin, CHANNEL, bytes.toByteArray());
+        } catch (IOException exception) {
+            plugin.getLogger().warning("Unable to send CCTSystem security alert: " + exception.getMessage());
+        }
+    }
 }

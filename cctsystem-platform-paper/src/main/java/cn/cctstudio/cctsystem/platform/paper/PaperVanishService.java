@@ -54,6 +54,7 @@ final class PaperVanishService implements Listener {
     private final Map<UUID, CompletableFuture<?>> writes = new ConcurrentHashMap<>();
     private final Map<UUID, BossBar> bossBars = new ConcurrentHashMap<>();
     private final Set<UUID> cctNightVision = ConcurrentHashMap.newKeySet();
+    private final PaperCmiAfkAdapter cmiAfk;
 
     PaperVanishService(
         JavaPlugin plugin,
@@ -74,6 +75,7 @@ final class PaperVanishService implements Listener {
         plugin.getServer().getMessenger().registerOutgoingPluginChannel(
             plugin, PaperNetworkChat.CHANNEL
         );
+        cmiAfk = PaperCmiAfkAdapter.install(plugin, vanished::contains, logger);
     }
 
     void toggle(Player player) {
@@ -176,6 +178,7 @@ final class PaperVanishService implements Listener {
     private void apply(Player player, boolean enabled, boolean notify) {
         if (enabled) {
             vanished.add(player.getUniqueId());
+            cmiAfk.leaveAfkSilently(player);
             for (Player viewer : plugin.getServer().getOnlinePlayers()) hideFrom(viewer, player);
             BossBar bar = BossBar.bossBar(
                 messages.component("vanish.bossbar").decoration(TextDecoration.ITALIC, false),

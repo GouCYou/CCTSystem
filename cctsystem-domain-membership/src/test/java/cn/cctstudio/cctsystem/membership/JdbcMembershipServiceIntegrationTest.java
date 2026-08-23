@@ -49,6 +49,7 @@ final class JdbcMembershipServiceIntegrationTest {
     private JdbcMembershipStore store;
     private JdbcMembershipService service;
     private AtomicInteger projectionSignals;
+    private volatile java.util.Set<String> accessGroups;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -61,17 +62,20 @@ final class JdbcMembershipServiceIntegrationTest {
         points = new FakePointsService();
         promotions = new FakePromotionService();
         projectionSignals = new AtomicInteger();
+        accessGroups = java.util.Set.of("default");
         store = new JdbcMembershipStore(database, executors, "membership-integration-node");
         store.syncConfiguration(TIERS).toCompletableFuture().get(5, TimeUnit.SECONDS);
         service = new JdbcMembershipService(
             store,
             points,
             promotions,
-            ignored -> CompletableFuture.completedFuture(new MembershipAccess(java.util.Set.of("default"))),
+            ignored -> CompletableFuture.completedFuture(new MembershipAccess(accessGroups)),
             Clock.fixed(NOW, ZoneOffset.UTC),
             60,
             365,
             java.util.Set.of("helper", "mod", "admin", "owner"),
+            java.util.Set.of("vip", "vip_plus", "mvp", "mvp_plus"),
+            false,
             projectionSignals::incrementAndGet
         );
     }
@@ -188,6 +192,84 @@ final class JdbcMembershipServiceIntegrationTest {
 
         assertEquals(MembershipOrderStatus.REVIEW_REQUIRED, recovered.status());
         assertEquals(0, points.debits.get());
+    }
+
+    @Test
+    void socialBindingVipPausesForStaffAndResumesAfterStaffRoleIsRemoved() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        MembershipSummary granted = service.grantSocialBindingReward(playerUuid)
+            .toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertEquals("vip", granted.active().tier().key());
+
+        accessGroups = java.util.Set.of("helper");
+        MembershipSummary paused = service.summary(playerUuid)
+            .toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertEquals(null, paused.active());
+        assertEquals(1, paused.paused().size());
+        assertEquals(7L * 86_400L, paused.paused().getFirst().remainingSeconds());
+
+        accessGroups = java.util.Set.of("default");
+        MembershipSummary resumed = service.summary(playerUuid)
+            .toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertEquals("vip", resumed.active().tier().key());
+        assertEquals(NOW.plusSeconds(7L * 86_400L), resumed.active().expiresAt());
+    }
+
+    @Test
+    void socialBindingVipStartsPausedWhenPlayerAlreadyBelongsToStaff() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        accessGroups = java.util.Set.of("admin");
+
+        MembershipSummary summary = service.grantSocialBindingReward(playerUuid)
+            .toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+        assertEquals(null, summary.active());
+        assertEquals("vip", summary.paused().getFirst().tier().key());
+        assertEquals(7L * 86_400L, summary.paused().getFirst().remainingSeconds());
+    }
+
+    @Test
+    void adminGrantedVipAlsoStartsPausedForStaff() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        accessGroups = java.util.Set.of("owner");
+
+        MembershipSummary summary = service.admin(new AdminMembershipRequest(
+            AdminMembershipAction.GRANT,
+            playerUuid,
+            "vip",
+            30,
+            null,
+            "console",
+            "integration-test"
+        )).toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+        assertEquals(null, summary.active());
+        assertEquals("vip", summary.paused().getFirst().tier().key());
+        assertEquals(30L * 86_400L, summary.paused().getFirst().remainingSeconds());
+    }
+
+    @Test
+    void staffSummaryRepairsLegacyMembershipGroupWithoutActiveEntitlement() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        accessGroups = java.util.Set.of("admin", "vip");
+
+        MembershipSummary summary = service.summary(playerUuid)
+            .toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+        assertEquals(null, summary.active());
+        try (Connection connection = database.connection();
+             PreparedStatement query = connection.prepareStatement("""
+                 SELECT desired_group, status
+                 FROM cct_luckperms_projections
+                 WHERE player_uuid = ?
+                 """)) {
+            query.setBytes(1, UuidBinary.encode(playerUuid));
+            try (java.sql.ResultSet result = query.executeQuery()) {
+                assertTrue(result.next());
+                assertEquals(null, result.getString("desired_group"));
+                assertEquals("PENDING", result.getString("status"));
+            }
+        }
     }
 
     private void expireActive(UUID playerUuid) throws SQLException {

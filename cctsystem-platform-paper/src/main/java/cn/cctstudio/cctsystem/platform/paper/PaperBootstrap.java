@@ -12,6 +12,8 @@ import cn.cctstudio.cctsystem.core.config.ConfigLoader;
 import cn.cctstudio.cctsystem.exchange.ExchangeRpcModule;
 import cn.cctstudio.cctsystem.exchange.ExchangeRuntimeModule;
 import cn.cctstudio.cctsystem.auth.AuthModule;
+import cn.cctstudio.cctsystem.auth.SocialBindingRewards;
+import cn.cctstudio.cctsystem.bridge.BridgeRpcClient;
 import cn.cctstudio.cctsystem.identity.IdentityModule;
 import cn.cctstudio.cctsystem.points.PointsRpcModule;
 import cn.cctstudio.cctsystem.points.PointsRuntimeModule;
@@ -25,12 +27,29 @@ import cn.cctstudio.cctsystem.storage.mysql.DatabaseManager;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.UUID;
 import net.luckperms.api.LuckPerms;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public final class PaperBootstrap extends JavaPlugin {
     private volatile CctRuntime runtime;
     private PaperIdentityExpansion identityExpansion;
+    private PaperAntiRedstoneAdapter antiRedstoneAdapter;
+
+    public CompletionStage<Void> rewardSocialBinding(UUID playerUuid) {
+        CctRuntime current = runtime;
+        if (current == null) {
+            return CompletableFuture.failedFuture(new IllegalStateException("CCTSystem is not ready"));
+        }
+        BridgeRpcClient bridge = current.providers().find(BridgeRpcClientProvider.KEY)
+            .orElse(null);
+        if (bridge == null) {
+            return CompletableFuture.failedFuture(new IllegalStateException("CCT bridge is unavailable"));
+        }
+        return SocialBindingRewards.deliver(bridge, playerUuid);
+    }
 
     @Override
     public void onEnable() {
@@ -49,6 +68,7 @@ public final class PaperBootstrap extends JavaPlugin {
                 logger
             );
             configureInfrastructure(created, logger, platformTasks);
+            PaperMinePaySettlementListener.install(this, created.providers(), logger);
             org.bukkit.plugin.RegisteredServiceProvider<LuckPerms> luckPermsRegistration =
                 getServer().getServicesManager().getRegistration(LuckPerms.class);
             PaperLuckPermsTitles titles = new PaperLuckPermsTitles(
@@ -83,6 +103,9 @@ public final class PaperBootstrap extends JavaPlugin {
                 this, messages, titles, nicknames, logger, config.serverId()
             );
             PaperNetworkChat networkChat = new PaperNetworkChat(this, messages, chatStyle);
+            antiRedstoneAdapter = PaperAntiRedstoneAdapter.install(
+                this, logger, messages, networkChat, config.serverId()
+            );
             PaperRewardsMenu rewards = new PaperRewardsMenu(
                 this,
                 created.providers(),
@@ -125,6 +148,10 @@ public final class PaperBootstrap extends JavaPlugin {
                 titles
             );
             getServer().getPluginManager().registerEvents(exchangeMenu, this);
+            PaperRechargeMenu rechargeMenu = new PaperRechargeMenu(
+                this, messages, menuDefinitions
+            );
+            getServer().getPluginManager().registerEvents(rechargeMenu, this);
             PaperMembershipMenu membershipMenu = new PaperMembershipMenu(
                 this,
                 created.providers(),
@@ -134,7 +161,8 @@ public final class PaperBootstrap extends JavaPlugin {
                 exchangeMenu,
                 titles,
                 messages,
-                menuDefinitions
+                menuDefinitions,
+                rechargeMenu
             );
             getServer().getPluginManager().registerEvents(membershipMenu, this);
             PaperMenuController menus = new PaperMenuController(
@@ -144,7 +172,8 @@ public final class PaperBootstrap extends JavaPlugin {
                 platformTasks,
                 logger,
                 messages,
-                networkChat
+                networkChat,
+                rechargeMenu
             );
             org.bukkit.command.PluginCommand cctCommand = getCommand("cct");
             if (cctCommand != null) {
@@ -172,7 +201,7 @@ public final class PaperBootstrap extends JavaPlugin {
                 cctAdminCommand.setTabCompleter(admin);
             }
             getServer().getPluginManager().registerEvents(
-                new PaperIdentityListener(created.providers(), logger),
+                new PaperIdentityListener(this, created.providers(), logger),
                 this
             );
             runtime = created;
@@ -198,6 +227,9 @@ public final class PaperBootstrap extends JavaPlugin {
         PaperIdentityExpansion expansion = identityExpansion;
         identityExpansion = null;
         if (expansion != null) expansion.unregister();
+        PaperAntiRedstoneAdapter redstoneAdapter = antiRedstoneAdapter;
+        antiRedstoneAdapter = null;
+        if (redstoneAdapter != null) redstoneAdapter.close();
         CctRuntime existing = runtime;
         runtime = null;
         if (existing == null) {
@@ -221,8 +253,9 @@ public final class PaperBootstrap extends JavaPlugin {
     private void prepareCustomizationResources() {
         saveResourceIfMissing("messages.yml");
         saveResourceIfMissing("rank-benefits.yml");
+        saveResourceIfMissing("anti-redstone.yml");
         for (String menu : java.util.List.of(
-            "personal", "membership", "exchange", "upgrade", "confirmation", "nickname", "rewards"
+            "personal", "membership", "exchange", "recharge", "upgrade", "confirmation", "nickname", "rewards"
         )) {
             saveResourceIfMissing("menus/" + menu + ".yml");
         }

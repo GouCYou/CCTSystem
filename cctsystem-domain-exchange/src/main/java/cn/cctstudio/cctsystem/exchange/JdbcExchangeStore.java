@@ -898,6 +898,56 @@ final class JdbcExchangeStore {
         }
     }
 
+    CompletionStage<Boolean> claimSocialCoinReward(UUID playerUuid) {
+        return runAsync(() -> {
+            try (Connection connection = database.connection()) {
+                return inTransaction(connection, () -> {
+                    try (PreparedStatement insert = connection.prepareStatement("""
+                        INSERT INTO cct_social_binding_rewards(player_uuid)
+                        VALUES (?) ON DUPLICATE KEY UPDATE player_uuid = player_uuid
+                        """)) {
+                        insert.setBytes(1, UuidBinary.encode(playerUuid));
+                        insert.executeUpdate();
+                    }
+                    try (PreparedStatement update = connection.prepareStatement("""
+                        UPDATE cct_social_binding_rewards SET coins_status = 'PROCESSING'
+                        WHERE player_uuid = ? AND coins_status = 'PENDING'
+                        """)) {
+                        update.setBytes(1, UuidBinary.encode(playerUuid));
+                        return update.executeUpdate() == 1;
+                    }
+                });
+            }
+        });
+    }
+
+    CompletionStage<Void> completeSocialCoinReward(UUID playerUuid) {
+        return socialCoinRewardStatus(playerUuid, "COMPLETED", true);
+    }
+
+    CompletionStage<Void> retrySocialCoinReward(UUID playerUuid) {
+        return socialCoinRewardStatus(playerUuid, "PENDING", false);
+    }
+
+    private CompletionStage<Void> socialCoinRewardStatus(
+        UUID playerUuid,
+        String status,
+        boolean completed
+    ) {
+        return runAsync(() -> {
+            String sql = completed
+                ? "UPDATE cct_social_binding_rewards SET coins_status = ?, coins_delivered_at = UTC_TIMESTAMP(3) WHERE player_uuid = ? AND coins_status = 'PROCESSING'"
+                : "UPDATE cct_social_binding_rewards SET coins_status = ?, coins_delivered_at = NULL WHERE player_uuid = ? AND coins_status = 'PROCESSING'";
+            try (Connection connection = database.connection();
+                 PreparedStatement update = connection.prepareStatement(sql)) {
+                update.setString(1, status);
+                update.setBytes(2, UuidBinary.encode(playerUuid));
+                update.executeUpdate();
+            }
+            return null;
+        });
+    }
+
     private static void setNullableInt(PreparedStatement statement, int index, Integer value)
         throws SQLException {
         if (value == null) {

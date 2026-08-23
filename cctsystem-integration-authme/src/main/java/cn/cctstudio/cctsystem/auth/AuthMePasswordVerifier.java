@@ -13,17 +13,50 @@ import java.util.function.Function;
 public final class AuthMePasswordVerifier implements PasswordVerifier {
     private final AuthMeApi authMe;
     private final Function<UUID, CompletionStage<Boolean>> qqBindingLookup;
+    private final SocialBindingGateway socialBindings;
 
     public AuthMePasswordVerifier(AuthMeApi authMe) {
-        this(authMe, ignored -> CompletableFuture.completedFuture(false));
+        this(authMe, SocialBindingGateway.unavailable());
     }
 
     public AuthMePasswordVerifier(
         AuthMeApi authMe,
         Function<UUID, CompletionStage<Boolean>> qqBindingLookup
     ) {
+        this(authMe, new SocialBindingGateway() {
+            @Override
+            public CompletionStage<SocialBindingStatus> status(UUID playerUuid) {
+                return qqBindingLookup.apply(playerUuid)
+                    .thenApply(bound -> new SocialBindingStatus(bound, false, ""));
+            }
+
+            @Override
+            public CompletionStage<String> bindDiscord(UUID playerUuid, String userId, String username) {
+                return CompletableFuture.failedFuture(new IllegalStateException("Discord binding unavailable"));
+            }
+
+            @Override
+            public CompletionStage<Boolean> unbindDiscord(UUID playerUuid) {
+                return CompletableFuture.failedFuture(new IllegalStateException("Discord binding unavailable"));
+            }
+
+            @Override
+            public CompletionStage<QqBindingChallenge> startQqBinding(UUID playerUuid, String playerName) {
+                return CompletableFuture.failedFuture(new IllegalStateException("QQ binding unavailable"));
+            }
+
+            @Override
+            public CompletionStage<Boolean> unbindQq(UUID playerUuid) {
+                return CompletableFuture.failedFuture(new IllegalStateException("QQ binding unavailable"));
+            }
+        });
+    }
+
+    public AuthMePasswordVerifier(AuthMeApi authMe, SocialBindingGateway socialBindings) {
         this.authMe = Objects.requireNonNull(authMe, "authMe");
-        this.qqBindingLookup = Objects.requireNonNull(qqBindingLookup, "qqBindingLookup");
+        this.socialBindings = Objects.requireNonNull(socialBindings, "socialBindings");
+        this.qqBindingLookup = playerUuid -> socialBindings.status(playerUuid)
+            .thenApply(SocialBindingStatus::qqBound);
     }
 
     @Override
@@ -53,6 +86,31 @@ public final class AuthMePasswordVerifier implements PasswordVerifier {
     @Override
     public CompletionStage<Boolean> qqBound(UUID playerUuid) {
         return qqBindingLookup.apply(playerUuid).exceptionally(ignored -> false);
+    }
+
+    @Override
+    public CompletionStage<SocialBindingStatus> socialBindings(UUID playerUuid) {
+        return socialBindings.status(playerUuid);
+    }
+
+    @Override
+    public CompletionStage<String> bindDiscord(UUID playerUuid, String discordUserId, String discordUsername) {
+        return socialBindings.bindDiscord(playerUuid, discordUserId, discordUsername);
+    }
+
+    @Override
+    public CompletionStage<Boolean> unbindDiscord(UUID playerUuid) {
+        return socialBindings.unbindDiscord(playerUuid);
+    }
+
+    @Override
+    public CompletionStage<QqBindingChallenge> startQqBinding(UUID playerUuid, String playerName) {
+        return socialBindings.startQqBinding(playerUuid, playerName);
+    }
+
+    @Override
+    public CompletionStage<Boolean> unbindQq(UUID playerUuid) {
+        return socialBindings.unbindQq(playerUuid);
     }
 
     @Override

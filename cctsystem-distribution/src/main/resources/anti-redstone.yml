@@ -1,0 +1,8 @@
+enabled: true
+nearby-radius: 20.0
+
+broadcast:
+  - "&c&l[高频红石警告] &c检测到高频红石装置，已自动清除并上报。"
+  - "&7服务器：&f{server}  &7世界：&f{world}  &7坐标：&f{x}, {y}, {z}"
+  - "&7附近玩家（{radius} 格）：&f{players}"
+  - "&e请勿搭建高频红石装置，再次发现可能导致账户被封停。"

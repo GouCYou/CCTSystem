@@ -80,11 +80,18 @@ final class RemoteMembershipService implements MembershipService {
 
     @Override
     public CompletionStage<MembershipSummary> admin(AdminMembershipRequest request) {
-        return CompletableFuture.failedFuture(new MembershipException(
-            "MEMBERSHIP_ADMIN_UNAVAILABLE",
-            "Membership administration must run on the business authority",
-            false
-        ));
+        ObjectNode payload = JSON.createObjectNode();
+        payload.put("action", request.action().name());
+        payload.put("playerUuid", request.playerUuid().toString());
+        if (request.tierKey() == null) payload.putNull("tierKey");
+        else payload.put("tierKey", request.tierKey());
+        payload.put("days", request.days());
+        if (request.expiresAt() == null) payload.putNull("expiresAt");
+        else payload.put("expiresAt", request.expiresAt().toString());
+        payload.put("actor", request.actor());
+        payload.put("reason", request.reason());
+        return call(Capability.MEMBERSHIP_MUTATE, MembershipRpcModule.ADMIN_OPERATION,
+            payload, null, RemoteMembershipService::summary);
     }
 
     private <T> CompletionStage<T> call(

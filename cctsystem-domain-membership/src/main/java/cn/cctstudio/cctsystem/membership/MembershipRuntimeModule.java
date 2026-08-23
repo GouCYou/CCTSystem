@@ -72,6 +72,8 @@ public final class MembershipRuntimeModule implements CctModule {
                         context.config().membership().quoteTtlSeconds(),
                         context.config().membership().maxPurchaseDays(),
                         context.config().membership().purchaseBlockedGroups(),
+                        managedGroups,
+                        true,
                         worker::trigger
                     )
                 );

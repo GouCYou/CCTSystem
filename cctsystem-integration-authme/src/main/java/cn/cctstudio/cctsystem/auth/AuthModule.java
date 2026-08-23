@@ -2,6 +2,8 @@ package cn.cctstudio.cctsystem.auth;
 
 import cn.cctstudio.cctsystem.bridge.BridgeProvider;
 import cn.cctstudio.cctsystem.bridge.BridgeRpcRouter;
+import cn.cctstudio.cctsystem.bridge.BridgeRpcClient;
+import cn.cctstudio.cctsystem.bridge.BridgeRpcClientProvider;
 import cn.cctstudio.cctsystem.bridge.RpcHandlingException;
 import cn.cctstudio.cctsystem.contract.Capability;
 import cn.cctstudio.cctsystem.contract.NodeRole;
@@ -27,7 +29,7 @@ public final class AuthModule implements CctModule {
         "auth",
         Set.of(PlatformType.PAPER),
         Set.of(NodeRole.AUTH_AUTHORITY),
-        Set.of(BridgeProvider.ID, IdentityProvider.ID, AuthMeProvider.ID),
+        Set.of(BridgeProvider.ID, BridgeRpcClientProvider.ID, IdentityProvider.ID, AuthMeProvider.ID),
         Set.of(Capability.AUTH_VERIFY, Capability.ACCOUNT_SECURITY_READ, Capability.ACCOUNT_SECURITY_MUTATE)
     );
 
@@ -44,6 +46,8 @@ public final class AuthModule implements CctModule {
             .orElseThrow(() -> new IllegalStateException("Identity provider is unavailable"));
         PasswordVerifier passwords = context.providers().find(AuthMeProvider.KEY)
             .orElseThrow(() -> new IllegalStateException("AuthMe provider is unavailable"));
+        BridgeRpcClient bridgeClient = context.providers().find(BridgeRpcClientProvider.KEY)
+            .orElseThrow(() -> new IllegalStateException("Bridge RPC client is unavailable"));
         router.register(
             Capability.AUTH_VERIFY.value(),
             payload -> authenticate(payload, identities, passwords, context)
@@ -53,9 +57,17 @@ public final class AuthModule implements CctModule {
             payload -> readSecurity(payload, identities, passwords, context)
         );
         router.register(
-            Capability.ACCOUNT_SECURITY_MUTATE.value(),
+            "account.password.change",
             payload -> changePassword(payload, identities, passwords, context)
         );
+        router.register("account.discord.bind", payload ->
+            bindDiscord(payload, identities, passwords, bridgeClient));
+        router.register("account.discord.unbind", payload ->
+            unbindDiscord(payload, identities, passwords));
+        router.register("account.qq.bind-start", payload ->
+            startQqBinding(payload, identities, passwords));
+        router.register("account.qq.unbind", payload ->
+            unbindQq(payload, identities, passwords));
         return CompletableFuture.completedFuture(null);
     }
 
@@ -126,7 +138,7 @@ public final class AuthModule implements CctModule {
         return requireIdentity(identities, playerUuid).thenCompose(identity -> CompletableFuture.supplyAsync(
             () -> passwords.accountDetails(identity.displayName()).orElseThrow(AuthModule::invalidCredentials),
             context.executors().blocking()
-        )).thenCompose(details -> passwords.qqBound(playerUuid).thenApply(qqBound -> {
+        )).thenCompose(details -> passwords.socialBindings(playerUuid).thenApply(bindings -> {
             ObjectNode result = JSON.createObjectNode();
             details.email().ifPresentOrElse(
                 email -> result.put("email", email),
@@ -141,9 +153,91 @@ public final class AuthModule implements CctModule {
                 value -> result.put("lastLoginIp", value),
                 () -> result.putNull("lastLoginIp")
             );
-            result.put("qqBound", qqBound);
+            result.put("qqBound", bindings.qqBound());
+            result.put("discordBound", bindings.discordBound());
+            if (bindings.discordUsername().isBlank()) result.putNull("discordUsername");
+            else result.put("discordUsername", bindings.discordUsername());
             return result;
         }));
+    }
+
+    private CompletionStage<com.fasterxml.jackson.databind.JsonNode> bindDiscord(
+        com.fasterxml.jackson.databind.JsonNode payload,
+        IdentityService identities,
+        PasswordVerifier passwords,
+        BridgeRpcClient bridgeClient
+    ) {
+        UUID playerUuid = requireUuid(payload);
+        String userId = requireText(payload, "discordUserId", 32);
+        String username = requireText(payload, "discordUsername", 80);
+        return requireIdentity(identities, playerUuid)
+            .thenCompose(ignored -> passwords.bindDiscord(playerUuid, userId, username))
+            .thenCompose(status -> {
+                if ("DISCORD_ALREADY_BOUND".equals(status)) {
+                    throw new RpcHandlingException(
+                        "DISCORD_ALREADY_BOUND", "This Discord account is bound to another player", false
+                    );
+                }
+                return SocialBindingRewards.deliver(bridgeClient, playerUuid)
+                    .handle((nothing, failure) -> status);
+            }).thenApply(status -> {
+                ObjectNode result = JSON.createObjectNode();
+                result.put("bound", true);
+                result.put("status", status);
+                return result;
+            });
+    }
+
+    private CompletionStage<com.fasterxml.jackson.databind.JsonNode> unbindDiscord(
+        com.fasterxml.jackson.databind.JsonNode payload,
+        IdentityService identities,
+        PasswordVerifier passwords
+    ) {
+        UUID playerUuid = requireUuid(payload);
+        return requireIdentity(identities, playerUuid)
+            .thenCompose(ignored -> passwords.unbindDiscord(playerUuid))
+            .thenApply(unbound -> {
+                ObjectNode result = JSON.createObjectNode();
+                result.put("unbound", unbound);
+                return result;
+            });
+    }
+
+    private CompletionStage<com.fasterxml.jackson.databind.JsonNode> startQqBinding(
+        com.fasterxml.jackson.databind.JsonNode payload,
+        IdentityService identities,
+        PasswordVerifier passwords
+    ) {
+        UUID playerUuid = requireUuid(payload);
+        return requireIdentity(identities, playerUuid).thenCompose(identity ->
+            passwords.socialBindings(playerUuid).thenCompose(status -> {
+                if (status.qqBound()) {
+                    throw new RpcHandlingException("QQ_ALREADY_BOUND", "QQ is already bound", false);
+                }
+                return passwords.startQqBinding(playerUuid, identity.displayName());
+            })
+        ).thenApply(challenge -> {
+            ObjectNode result = JSON.createObjectNode();
+            result.put("code", challenge.code());
+            result.put("expiresAt", challenge.expiresAt().toString());
+            result.put("groupNumber", challenge.groupNumber());
+            return result;
+        });
+    }
+
+    private CompletionStage<com.fasterxml.jackson.databind.JsonNode> unbindQq(
+        com.fasterxml.jackson.databind.JsonNode payload,
+        IdentityService identities,
+        PasswordVerifier passwords
+    ) {
+        UUID playerUuid = requireUuid(payload);
+        return requireIdentity(identities, playerUuid)
+            .thenCompose(ignored -> passwords.unbindQq(playerUuid))
+            .thenApply(unbound -> {
+                ObjectNode result = JSON.createObjectNode();
+                result.put("unbound", unbound);
+                return result;
+            });
     }
 
     private CompletionStage<com.fasterxml.jackson.databind.JsonNode> changePassword(
@@ -187,6 +281,17 @@ public final class AuthModule implements CctModule {
         }
         String value = payload.path(field).textValue();
         if (value.length() < minimum || value.length() > 256) {
+            throw new RpcHandlingException("AUTH_REQUEST_INVALID", "Invalid account request", false);
+        }
+        return value;
+    }
+
+    private static String requireText(com.fasterxml.jackson.databind.JsonNode payload, String field, int maximum) {
+        if (payload == null || !payload.path(field).isTextual()) {
+            throw new RpcHandlingException("AUTH_REQUEST_INVALID", "Invalid account request", false);
+        }
+        String value = payload.path(field).textValue().trim();
+        if (value.isEmpty() || value.length() > maximum) {
             throw new RpcHandlingException("AUTH_REQUEST_INVALID", "Invalid account request", false);
         }
         return value;

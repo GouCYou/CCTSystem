@@ -18,7 +18,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 final class PaperMenus {
     private static final List<String> MENU_IDS = List.of(
-        "personal", "membership", "exchange", "upgrade", "confirmation", "nickname", "rewards"
+        "personal", "membership", "exchange", "recharge", "upgrade", "confirmation", "nickname", "rewards"
     );
     private final JavaPlugin plugin;
     private volatile Map<String, MenuDefinition> definitions = Map.of();

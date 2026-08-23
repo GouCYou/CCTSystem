@@ -27,7 +27,10 @@ final class MigrationRunner {
         new Migration(6, "delivery_rewards", "/db/migration/V6__delivery_rewards.sql"),
         new Migration(7, "network_vanish", "/db/migration/V7__network_vanish.sql"),
         new Migration(8, "membership_credit_basis", "/db/migration/V8__membership_credit_basis.sql"),
-        new Migration(9, "membership_credit_before_prior_credit", "/db/migration/V9__membership_credit_before_prior_credit.sql")
+        new Migration(9, "membership_credit_before_prior_credit", "/db/migration/V9__membership_credit_before_prior_credit.sql"),
+        new Migration(10, "social_binding_rewards", "/db/migration/V10__social_binding_rewards.sql"),
+        new Migration(11, "qq_binding_challenges", "/db/migration/V11__qq_binding_challenges.sql"),
+        new Migration(12, "membership_access_pause", "/db/migration/V12__membership_access_pause.sql")
     );
 
     private final DataSource dataSource;

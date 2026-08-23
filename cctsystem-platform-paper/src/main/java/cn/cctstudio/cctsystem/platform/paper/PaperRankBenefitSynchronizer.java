@@ -4,6 +4,7 @@ import cn.cctstudio.cctsystem.core.logging.CctLogger;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import net.luckperms.api.LuckPerms;
 import net.luckperms.api.model.group.Group;
@@ -50,6 +51,9 @@ final class PaperRankBenefitSynchronizer {
             List<String> removals = yaml.getStringList(
                 "groups." + groupName + ".remove-permissions"
             );
+            List<String> managedPrefixes = yaml.getStringList(
+                "groups." + groupName + ".managed-permission-prefixes"
+            ).stream().map(value -> value.toLowerCase(Locale.ROOT)).toList();
             CompletableFuture<Void> save = luckPerms.getGroupManager()
                 .loadGroup(groupName)
                 .thenCompose(result -> {
@@ -60,6 +64,12 @@ final class PaperRankBenefitSynchronizer {
                     }
                     for (String permission : removals) {
                         group.data().clear(node -> node.getKey().equalsIgnoreCase(permission));
+                    }
+                    if (!managedPrefixes.isEmpty()) {
+                        group.data().clear(node -> {
+                            String key = node.getKey().toLowerCase(Locale.ROOT);
+                            return managedPrefixes.stream().anyMatch(key::startsWith);
+                        });
                     }
                     for (String permission : additions) {
                         group.data().add(Node.builder(permission).value(true).build());

@@ -4,14 +4,61 @@ apply-on-server-ids: [lobby, survival, creative]
 
 groups:
   default:
+    managed-permission-prefixes: [MyPet.leash.]
     add-permissions:
       - cmi.command.sethome.3
       - plots.plot.1
       - residence.group.default
       - MyPet.petstorage.limit.1
+      - minepay.user.point
+      - MyPet.leash.Chicken
+      - MyPet.leash.Cow
+      - MyPet.leash.Pig
+      - MyPet.leash.Sheep
+      - MyPet.leash.Rabbit
+      - MyPet.leash.Wolf
+      - MyPet.leash.Cat
+      - MyPet.leash.Ocelot
+      - MyPet.leash.Fox
+      - MyPet.leash.Horse
+      - MyPet.leash.Donkey
+      - MyPet.leash.Mule
+      - MyPet.leash.Llama
+      - MyPet.leash.TraderLlama
+      - MyPet.leash.Parrot
+      - MyPet.leash.Bee
+      - MyPet.leash.Turtle
+      - MyPet.leash.Frog
+      - MyPet.leash.Tadpole
+      - MyPet.leash.Goat
+      - MyPet.leash.Panda
+      - MyPet.leash.PolarBear
+      - MyPet.leash.Camel
+      - MyPet.leash.Armadillo
+      - MyPet.leash.Cod
+      - MyPet.leash.Salmon
+      - MyPet.leash.TropicalFish
+      - MyPet.leash.Pufferfish
+      - MyPet.leash.Squid
+      - MyPet.leash.Bat
+      - MyPet.leash.Spider
+      - MyPet.leash.CaveSpider
+      - MyPet.leash.Zombie
+      - MyPet.leash.Husk
+      - MyPet.leash.Drowned
+      - MyPet.leash.ZombieVillager
+      - MyPet.leash.Skeleton
+      - MyPet.leash.Stray
+      - MyPet.leash.Bogged
+      - MyPet.leash.Creeper
+      - MyPet.leash.Slime
+      - MyPet.leash.Silverfish
+      - MyPet.leash.Phantom
+      - MyPet.leash.Endermite
     remove-permissions:
       - MyPet.petstorage.limit.2
   vip:
+    managed-permission-prefixes: [MyPet.leash.]
     add-permissions:
       - cctsystem.reward.vip
       - quickshop.limit.vip
@@ -27,10 +74,22 @@ groups:
       - residence.group.vip
       - MyPet.petstorage.limit.2
       - MyPet.experience.multiplier.150
+      - MyPet.leash.Mooshroom
+      - MyPet.leash.GlowSquid
+      - MyPet.leash.Axolotl
+      - MyPet.leash.Dolphin
+      - MyPet.leash.Snowman
+      - MyPet.leash.IronGolem
+      - MyPet.leash.Witch
+      - MyPet.leash.Allay
+      - MyPet.leash.Sniffer
+      - MyPet.leash.Villager
+      - MyPet.leash.WanderingTrader
     remove-permissions:
       - cmi.command.sethome.5
       - MyPet.petstorage.limit.3
   vipp:
+    managed-permission-prefixes: [MyPet.leash.]
     add-permissions:
       - cctsystem.reward.vipp
       - quickshop.limit.vipp
@@ -46,12 +105,25 @@ groups:
       - residence.group.vipp
       - MyPet.petstorage.limit.3
       - MyPet.experience.multiplier.200
+      - MyPet.leash.Piglin
+      - MyPet.leash.ZombifiedPiglin
+      - MyPet.leash.Hoglin
+      - MyPet.leash.Zoglin
+      - MyPet.leash.Blaze
+      - MyPet.leash.MagmaCube
+      - MyPet.leash.Ghast
+      - MyPet.leash.Pillager
+      - MyPet.leash.Vindicator
+      - MyPet.leash.Vex
+      - MyPet.leash.Guardian
+      - MyPet.leash.Breeze
     remove-permissions:
       - cmi.command.sethome.6
       - MyPet.petstorage.limit.4
       - MyPet.experience.multiplier.175
       - MyPet.command.name.color
   mvp:
+    managed-permission-prefixes: [MyPet.leash.]
     add-permissions:
       - cctsystem.reward.mvp
       - quickshop.limit.mvp
@@ -65,11 +137,19 @@ groups:
       - residence.group.mvp
       - MyPet.petstorage.limit.4
       - MyPet.experience.multiplier.250
+      - MyPet.leash.Enderman
+      - MyPet.leash.WitherSkeleton
+      - MyPet.leash.PiglinBrute
+      - MyPet.leash.Evoker
+      - MyPet.leash.Ravager
+      - MyPet.leash.ElderGuardian
+      - MyPet.leash.Creaking
     remove-permissions:
       - cmi.command.sethome.7
       - MyPet.petstorage.limit.5
       - MyPet.experience.multiplier.200
   mvpp:
+    managed-permission-prefixes: [MyPet.leash.]
     add-permissions:
       - cctsystem.reward.mvpp
       - quickshop.limit.mvpp
@@ -86,6 +166,9 @@ groups:
       - MyPet.petstorage.limit.5
       - MyPet.experience.multiplier.300
       - MyPet.command.name.color
+      - MyPet.leash.Warden
+      - MyPet.leash.Wither
+      - MyPet.leash.EnderDragon
     remove-permissions:
       - cmi.command.sethome.8
       - MyPet.petstorage.limit.6

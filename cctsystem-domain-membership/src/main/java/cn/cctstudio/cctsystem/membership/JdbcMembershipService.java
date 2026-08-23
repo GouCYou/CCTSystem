@@ -20,6 +20,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 
 final class JdbcMembershipService implements MembershipService {
+    private static final UUID PUBLIC_PRICING_PLAYER_UUID = new UUID(0L, 0L);
     private final JdbcMembershipStore store;
     private final PointsService points;
     private final PromotionService promotions;
@@ -28,7 +29,9 @@ final class JdbcMembershipService implements MembershipService {
     private final int quoteTtlSeconds;
     private final int maxPurchaseDays;
     private final Set<String> purchaseBlockedGroups;
+    private final Set<String> managedGroups;
     private final Runnable projectionSignal;
+    private final boolean requireSocialBinding;
 
     JdbcMembershipService(
         JdbcMembershipStore store,
@@ -41,6 +44,39 @@ final class JdbcMembershipService implements MembershipService {
         Set<String> purchaseBlockedGroups,
         Runnable projectionSignal
     ) {
+        this(store, points, promotions, accessGateway, clock, quoteTtlSeconds, maxPurchaseDays,
+            purchaseBlockedGroups, Set.of(), false, projectionSignal);
+    }
+
+    JdbcMembershipService(
+        JdbcMembershipStore store,
+        PointsService points,
+        PromotionService promotions,
+        MembershipAccessGateway accessGateway,
+        Clock clock,
+        int quoteTtlSeconds,
+        int maxPurchaseDays,
+        Set<String> purchaseBlockedGroups,
+        boolean requireSocialBinding,
+        Runnable projectionSignal
+    ) {
+        this(store, points, promotions, accessGateway, clock, quoteTtlSeconds, maxPurchaseDays,
+            purchaseBlockedGroups, Set.of(), requireSocialBinding, projectionSignal);
+    }
+
+    JdbcMembershipService(
+        JdbcMembershipStore store,
+        PointsService points,
+        PromotionService promotions,
+        MembershipAccessGateway accessGateway,
+        Clock clock,
+        int quoteTtlSeconds,
+        int maxPurchaseDays,
+        Set<String> purchaseBlockedGroups,
+        Set<String> managedGroups,
+        boolean requireSocialBinding,
+        Runnable projectionSignal
+    ) {
         this.store = store;
         this.points = points;
         this.promotions = promotions;
@@ -49,6 +85,8 @@ final class JdbcMembershipService implements MembershipService {
         this.quoteTtlSeconds = quoteTtlSeconds;
         this.maxPurchaseDays = maxPurchaseDays;
         this.purchaseBlockedGroups = Set.copyOf(purchaseBlockedGroups);
+        this.managedGroups = Set.copyOf(managedGroups);
+        this.requireSocialBinding = requireSocialBinding;
         this.projectionSignal = Objects.requireNonNull(projectionSignal, "projectionSignal");
     }
 
@@ -59,15 +97,24 @@ final class JdbcMembershipService implements MembershipService {
 
     @Override
     public CompletionStage<MembershipSummary> summary(UUID playerUuid) {
-        return store.reconcileAndSummary(Objects.requireNonNull(playerUuid, "playerUuid"), clock.instant());
+        UUID requiredPlayerUuid = Objects.requireNonNull(playerUuid, "playerUuid");
+        return accessAwareSummary(requiredPlayerUuid, clock.instant()).thenApply(this::signalProjection);
     }
 
     @Override
     public CompletionStage<MembershipMenuSnapshot> menu(UUID playerUuid) {
         Objects.requireNonNull(playerUuid, "playerUuid");
+        boolean publicPricing = PUBLIC_PRICING_PLAYER_UUID.equals(playerUuid);
         Instant now = clock.instant();
         return context(playerUuid, now).thenCompose(context -> {
-            if (MembershipPurchasePolicy.isBlocked(context.access(), purchaseBlockedGroups)) {
+            if (!publicPricing && !context.sociallyBound()) {
+                return CompletableFuture.completedFuture(new MembershipMenuSnapshot(
+                    context.summary(), context.catalog().stream()
+                        .map(tier -> new MembershipMenuTier(tier, null, "MEMBERSHIP_BINDING_REQUIRED"))
+                        .toList()
+                ));
+            }
+            if (!publicPricing && MembershipPurchasePolicy.isBlocked(context.access(), purchaseBlockedGroups)) {
                 return CompletableFuture.completedFuture(new MembershipMenuSnapshot(
                     context.summary(),
                     context.catalog().stream()
@@ -114,6 +161,7 @@ final class JdbcMembershipService implements MembershipService {
         Instant now = clock.instant();
         return context(playerUuid, now)
             .thenCompose(context -> {
+                ensureSocialBinding(context.sociallyBound());
                 MembershipPurchasePolicy.ensureAccess(context.access(), purchaseBlockedGroups);
                 MembershipTier target = context.catalog().stream()
                     .filter(tier -> tier.key().equals(normalizedTier) && tier.enabled())
@@ -193,7 +241,7 @@ final class JdbcMembershipService implements MembershipService {
         }
         if (request.action() != AdminMembershipAction.EXTEND
             && request.action() != AdminMembershipAction.GRANT) {
-            return store.admin(request, now).thenApply(this::signalProjection);
+            return applyAdmin(request, now);
         }
         return summary(request.playerUuid()).thenCompose(summary -> {
             MembershipEntitlement entitlement = entitlement(summary, request.tierKey());
@@ -213,8 +261,17 @@ final class JdbcMembershipService implements MembershipService {
                     }
                 }
             }
-            return store.admin(request, now).thenApply(this::signalProjection);
+            return applyAdmin(request, now);
         });
+    }
+
+    @Override
+    public CompletionStage<MembershipSummary> grantSocialBindingReward(UUID playerUuid) {
+        Objects.requireNonNull(playerUuid, "playerUuid");
+        Instant now = clock.instant();
+        return store.grantSocialBindingVip(playerUuid, now)
+            .thenCompose(ignored -> accessAwareSummary(playerUuid, now))
+            .thenApply(this::signalProjection);
     }
 
     private MembershipOrderResult signalProjection(MembershipOrderResult result) {
@@ -240,13 +297,45 @@ final class JdbcMembershipService implements MembershipService {
     }
 
     private CompletionStage<QuoteContext> context(UUID playerUuid, Instant now) {
-        CompletionStage<MembershipSummary> summary = store.reconcileAndSummary(playerUuid, now);
         CompletionStage<List<MembershipTier>> catalog = store.catalog();
         CompletionStage<MembershipAccess> access = accessGateway.access(playerUuid);
-        return summary.thenCombine(catalog, SummaryCatalog::new)
-            .thenCombine(access, (data, membershipAccess) -> new QuoteContext(
-                data.summary(), data.catalog(), membershipAccess
+        CompletionStage<Boolean> sociallyBound = requireSocialBinding
+            ? store.sociallyBound(playerUuid)
+            : CompletableFuture.completedFuture(true);
+        CompletionStage<AccessContext> membership = access.thenCompose(membershipAccess ->
+            store.reconcileAndSummary(
+                playerUuid,
+                now,
+                MembershipPurchasePolicy.isBlocked(membershipAccess, purchaseBlockedGroups),
+                shouldClearManagedGroups(membershipAccess)
+            ).thenCombine(catalog, (summary, tiers) -> new AccessContext(
+                new SummaryCatalog(summary, tiers), membershipAccess
+            ))
+        );
+        return membership
+            .thenCombine(sociallyBound, (data, bound) -> new QuoteContext(
+                data.data().summary(), data.data().catalog(), data.access(), bound
             ));
+    }
+
+    private CompletionStage<MembershipSummary> applyAdmin(AdminMembershipRequest request, Instant now) {
+        return store.admin(request, now)
+            .thenCompose(ignored -> accessAwareSummary(request.playerUuid(), now))
+            .thenApply(this::signalProjection);
+    }
+
+    private CompletionStage<MembershipSummary> accessAwareSummary(UUID playerUuid, Instant now) {
+        return accessGateway.access(playerUuid).thenCompose(access -> store.reconcileAndSummary(
+            playerUuid,
+            now,
+            MembershipPurchasePolicy.isBlocked(access, purchaseBlockedGroups),
+            shouldClearManagedGroups(access)
+        ));
+    }
+
+    private boolean shouldClearManagedGroups(MembershipAccess access) {
+        return MembershipPurchasePolicy.isBlocked(access, purchaseBlockedGroups)
+            && access.belongsToAny(managedGroups);
     }
 
     private MembershipQuote quote(
@@ -453,6 +542,16 @@ final class JdbcMembershipService implements MembershipService {
         return tierKey.toLowerCase(Locale.ROOT);
     }
 
+    private static void ensureSocialBinding(boolean bound) {
+        if (!bound) {
+            throw new MembershipException(
+                "MEMBERSHIP_BINDING_REQUIRED",
+                "Bind QQ or Discord before purchasing a membership",
+                false
+            );
+        }
+    }
+
     private static <T> void complete(CompletableFuture<T> future, T value, Throwable failure) {
         if (failure == null) {
             future.complete(value);
@@ -472,10 +571,14 @@ final class JdbcMembershipService implements MembershipService {
     private record SummaryCatalog(MembershipSummary summary, List<MembershipTier> catalog) {
     }
 
+    private record AccessContext(SummaryCatalog data, MembershipAccess access) {
+    }
+
     private record QuoteContext(
         MembershipSummary summary,
         List<MembershipTier> catalog,
-        MembershipAccess access
+        MembershipAccess access,
+        boolean sociallyBound
     ) {
     }
 }

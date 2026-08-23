@@ -1,0 +1,48 @@
+rows: 4
+title-key: menus.recharge.title
+payment-page: "https://www.cctstudio.cn/account"
+
+fill:
+  enabled: false
+  material: AIR
+  slots: []
+
+items:
+  profile:
+    slot: 4
+    material: GOLD_INGOT
+    action: PROFILE
+  amount_6:
+    slot: 10
+    material: GOLD_NUGGET
+    action: TOP_UP
+    value: 6
+  amount_30:
+    slot: 12
+    material: GOLD_INGOT
+    action: TOP_UP
+    value: 30
+  amount_98:
+    slot: 14
+    material: GOLD_BLOCK
+    action: TOP_UP
+    value: 98
+  amount_198:
+    slot: 16
+    material: EMERALD
+    action: TOP_UP
+    value: 198
+  amount_328:
+    slot: 21
+    material: EMERALD_BLOCK
+    action: TOP_UP
+    value: 328
+  amount_648:
+    slot: 23
+    material: DIAMOND
+    action: TOP_UP
+    value: 648
+  close:
+    slot: 31
+    material: BARRIER
+    action: CLOSE

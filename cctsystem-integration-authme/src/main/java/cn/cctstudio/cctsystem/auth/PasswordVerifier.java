@@ -11,5 +11,15 @@ public interface PasswordVerifier {
 
     CompletionStage<Boolean> qqBound(UUID playerUuid);
 
+    CompletionStage<SocialBindingStatus> socialBindings(UUID playerUuid);
+
+    CompletionStage<String> bindDiscord(UUID playerUuid, String discordUserId, String discordUsername);
+
+    CompletionStage<Boolean> unbindDiscord(UUID playerUuid);
+
+    CompletionStage<QqBindingChallenge> startQqBinding(UUID playerUuid, String playerName);
+
+    CompletionStage<Boolean> unbindQq(UUID playerUuid);
+
     void changePassword(String playerName, String newPassword);
 }

@@ -29,4 +29,10 @@ public interface MembershipService {
     CompletionStage<MembershipSummary> reconcile(UUID playerUuid);
 
     CompletionStage<MembershipSummary> admin(AdminMembershipRequest request);
+
+    default CompletionStage<MembershipSummary> grantSocialBindingReward(UUID playerUuid) {
+        return java.util.concurrent.CompletableFuture.failedFuture(new MembershipException(
+            "MEMBERSHIP_SOCIAL_REWARD_UNAVAILABLE", "Social binding reward is unavailable", true
+        ));
+    }
 }

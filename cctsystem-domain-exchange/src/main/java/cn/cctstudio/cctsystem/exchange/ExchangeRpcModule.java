@@ -21,6 +21,7 @@ import java.util.concurrent.CompletionStage;
 
 public final class ExchangeRpcModule implements CctModule {
     public static final String QUOTE_OPERATION = "exchange.quote";
+    public static final String SOCIAL_REWARD_OPERATION = "economy.social-binding-reward";
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final ModuleDescriptor DESCRIPTOR = new ModuleDescriptor(
         "exchange-rpc",
@@ -44,6 +45,15 @@ public final class ExchangeRpcModule implements CctModule {
             .orElseThrow(() -> new IllegalStateException("Exchange service provider is unavailable"));
         router.register(QUOTE_OPERATION, payload -> mapErrors(quote(payload, service)));
         router.registerCall(Capability.EXCHANGE_EXECUTE.value(), call -> mapErrors(execute(call, service)));
+        router.registerCall(SOCIAL_REWARD_OPERATION, call -> {
+            if (call.idempotencyKey() == null || call.idempotencyKey().isBlank()) throw invalidRequest();
+            return mapErrors(service.grantSocialBindingReward(requireUuid(call.payload()))
+                .thenApply(delivered -> {
+                    ObjectNode result = JSON.createObjectNode();
+                    result.put("delivered", delivered);
+                    return result;
+                }));
+        });
         return CompletableFuture.completedFuture(null);
     }
 
