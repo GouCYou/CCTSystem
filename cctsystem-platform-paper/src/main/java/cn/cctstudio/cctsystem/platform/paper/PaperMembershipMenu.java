@@ -60,7 +60,6 @@ final class PaperMembershipMenu implements Listener {
     private final PaperLuckPermsTitles titles;
     private final PaperMessages messages;
     private final PaperMenus menus;
-    private final PaperRechargeMenu rechargeMenu;
     private final List<MembershipTier> configuredTiers;
     private final Set<UUID> inFlight = ConcurrentHashMap.newKeySet();
     private final Map<UUID, CompletableFuture<PersonalData>> personalLoads =
@@ -80,8 +79,7 @@ final class PaperMembershipMenu implements Listener {
         PaperExchangeMenu exchangeMenu,
         PaperLuckPermsTitles titles,
         PaperMessages messages,
-        PaperMenus menus,
-        PaperRechargeMenu rechargeMenu
+        PaperMenus menus
     ) {
         this.plugin = plugin;
         this.providers = providers;
@@ -92,7 +90,6 @@ final class PaperMembershipMenu implements Listener {
         this.titles = titles;
         this.messages = messages;
         this.menus = menus;
-        this.rechargeMenu = rechargeMenu;
         this.configuredTiers = config.membership().tiers().stream()
             .filter(MembershipTierConfig::enabled)
             .sorted(java.util.Comparator.comparingInt(MembershipTierConfig::priority))
@@ -150,7 +147,6 @@ final class PaperMembershipMenu implements Listener {
             switch (personal.layout.actionAt(slot)) {
                 case "OPEN_MEMBERSHIP" -> openMemberships(player);
                 case "OPEN_EXCHANGE" -> exchangeMenu.open(player);
-                case "OPEN_RECHARGE" -> rechargeMenu.open(player);
                 case "REDEEM_HINT" -> player.sendMessage(messages.component("menus.personal.redeem-hint"));
                 case "CLOSE" -> player.closeInventory();
                 default -> { }
@@ -287,9 +283,6 @@ final class PaperMembershipMenu implements Listener {
         putConfigured(inventory, holder.layout.item("exchange"),
             messages.component("menus.personal.exchange-name"),
             messages.components("menus.personal.exchange-lore"), Material.EMERALD);
-        putConfigured(inventory, holder.layout.item("recharge"),
-            messages.component("menus.personal.recharge-name"),
-            messages.components("menus.personal.recharge-lore"), Material.GOLD_INGOT);
         putConfigured(inventory, holder.layout.item("redeem"),
             messages.component("menus.personal.redeem-name"),
             messages.components("menus.personal.redeem-lore"), Material.NAME_TAG);

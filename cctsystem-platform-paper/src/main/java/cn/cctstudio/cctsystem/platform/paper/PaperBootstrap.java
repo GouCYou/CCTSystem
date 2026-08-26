@@ -68,7 +68,6 @@ public final class PaperBootstrap extends JavaPlugin {
                 logger
             );
             configureInfrastructure(created, logger, platformTasks);
-            PaperMinePaySettlementListener.install(this, created.providers(), logger);
             org.bukkit.plugin.RegisteredServiceProvider<LuckPerms> luckPermsRegistration =
                 getServer().getServicesManager().getRegistration(LuckPerms.class);
             PaperLuckPermsTitles titles = new PaperLuckPermsTitles(
@@ -103,9 +102,6 @@ public final class PaperBootstrap extends JavaPlugin {
                 this, messages, titles, nicknames, logger, config.serverId()
             );
             PaperNetworkChat networkChat = new PaperNetworkChat(this, messages, chatStyle);
-            antiRedstoneAdapter = PaperAntiRedstoneAdapter.install(
-                this, logger, messages, networkChat, config.serverId()
-            );
             PaperRewardsMenu rewards = new PaperRewardsMenu(
                 this,
                 created.providers(),
@@ -130,6 +126,10 @@ public final class PaperBootstrap extends JavaPlugin {
                 messages,
                 config.serverId()
             );
+            antiRedstoneAdapter = PaperAntiRedstoneAdapter.install(
+                this, logger, messages, networkChat, titles, vanish::isVanished,
+                config.serverId()
+            );
             getServer().getPluginManager().registerEvents(vanish, this);
             getServer().getPluginManager().registerEvents(
                 new PaperShortcutListener(
@@ -148,10 +148,6 @@ public final class PaperBootstrap extends JavaPlugin {
                 titles
             );
             getServer().getPluginManager().registerEvents(exchangeMenu, this);
-            PaperRechargeMenu rechargeMenu = new PaperRechargeMenu(
-                this, messages, menuDefinitions
-            );
-            getServer().getPluginManager().registerEvents(rechargeMenu, this);
             PaperMembershipMenu membershipMenu = new PaperMembershipMenu(
                 this,
                 created.providers(),
@@ -161,8 +157,7 @@ public final class PaperBootstrap extends JavaPlugin {
                 exchangeMenu,
                 titles,
                 messages,
-                menuDefinitions,
-                rechargeMenu
+                menuDefinitions
             );
             getServer().getPluginManager().registerEvents(membershipMenu, this);
             PaperMenuController menus = new PaperMenuController(
@@ -172,8 +167,7 @@ public final class PaperBootstrap extends JavaPlugin {
                 platformTasks,
                 logger,
                 messages,
-                networkChat,
-                rechargeMenu
+                networkChat
             );
             org.bukkit.command.PluginCommand cctCommand = getCommand("cct");
             if (cctCommand != null) {
@@ -255,7 +249,7 @@ public final class PaperBootstrap extends JavaPlugin {
         saveResourceIfMissing("rank-benefits.yml");
         saveResourceIfMissing("anti-redstone.yml");
         for (String menu : java.util.List.of(
-            "personal", "membership", "exchange", "recharge", "upgrade", "confirmation", "nickname", "rewards"
+            "personal", "membership", "exchange", "upgrade", "confirmation", "nickname", "rewards"
         )) {
             saveResourceIfMissing("menus/" + menu + ".yml");
         }

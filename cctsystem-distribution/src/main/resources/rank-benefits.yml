@@ -10,7 +10,6 @@ groups:
       - plots.plot.1
       - residence.group.default
       - MyPet.petstorage.limit.1
-      - minepay.user.point
       - MyPet.leash.Chicken
       - MyPet.leash.Cow
       - MyPet.leash.Pig

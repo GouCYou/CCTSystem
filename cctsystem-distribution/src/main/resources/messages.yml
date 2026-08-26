@@ -12,7 +12,6 @@ commands:
     - "&6&lCCTSystem"
     - "&e/cct me &7- 打开个人中心"
     - "&e/cct vip &7- 打开会员中心"
-    - "&e/cct recharge &7- 打开点券充值"
     - "&e/cct exchange [1|10|100|max] &7- 兑换点券"
     - "&e/cct redeem <兑换码> &7- 使用兑换码"
     - "&e/cct shout <内容> &7- 发送跨服消息"
@@ -159,21 +158,9 @@ menus:
     membership-lore: ["&7查看等级与价格"]
     exchange-name: "&a金币兑换"
     exchange-lore: ["&7兑换服务器金币"]
-    recharge-name: "&6点券充值"
-    recharge-lore: ["&7通过官网安全充值"]
     redeem-name: "&6兑换码"
     redeem-lore: ["&7输入 /cct redeem <兑换码>"]
     redeem-hint: "&e请在聊天栏输入 /cct redeem <兑换码>"
-    close-name: "&c关闭"
-  recharge:
-    title: "&8点券充值"
-    profile-name: "&6点券充值"
-    profile-lore: ["&71 CNY = 20 点券", "&7所有子服均可充值", "&7选择金额后点击聊天链接支付"]
-    amount-name: "&a充值 ¥{amount}"
-    amount-lore: ["&7预计到账 &6{points} 点券", "&a点击创建充值订单"]
-    open-payment: "&a&l[点击前往支付] &f充值 ¥{amount}"
-    open-payment-hover: "&7打开 CCTStudio 官网安全支付页面"
-    invalid-amount: "&c充值金额配置无效"
     close-name: "&c关闭"
   membership:
     title: "&8会员中心"

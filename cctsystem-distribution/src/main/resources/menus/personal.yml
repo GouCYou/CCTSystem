@@ -19,10 +19,6 @@ items:
     slot: 13
     material: EMERALD
     action: OPEN_EXCHANGE
-  recharge:
-    slot: 14
-    material: GOLD_INGOT
-    action: OPEN_RECHARGE
   redeem:
     slot: 15
     material: NAME_TAG

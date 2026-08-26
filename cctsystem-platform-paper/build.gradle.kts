@@ -22,5 +22,4 @@ dependencies {
     compileOnly("com.github.MilkBowl:VaultAPI:1.7.1")
     compileOnly("net.luckperms:api:5.5")
     compileOnly("me.clip:placeholderapi:2.12.2")
-    compileOnly("top.minepay:MinePayApi:1.8-RELEASE")
 }
