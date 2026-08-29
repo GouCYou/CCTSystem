@@ -61,7 +61,6 @@ public final class PaperBootstrap extends JavaPlugin {
             PaperMessages messages = new PaperMessages(this);
             PaperMenus menuDefinitions = new PaperMenus(this);
             PaperTaskExecutor platformTasks = new PaperTaskExecutor(this);
-            PaperSurvivalWorldPolicy.install(this, logger, config.serverId());
             CctRuntime created = new CctRuntime(
                 PlatformType.PAPER,
                 config,
