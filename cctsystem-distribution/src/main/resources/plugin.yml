@@ -37,6 +37,8 @@ commands:
 permissions:
   cctsystem.use:
     default: true
+    children:
+      keepinventory.keep: true
   cctsystem.admin:
     default: op
   cctsystem.shout:
