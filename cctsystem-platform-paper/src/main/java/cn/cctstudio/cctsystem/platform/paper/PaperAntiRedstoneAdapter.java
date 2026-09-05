@@ -26,6 +26,8 @@ final class PaperAntiRedstoneAdapter implements AutoCloseable {
     private final PaperMessages messages;
     private final PaperNetworkChat networkChat;
     private final String serverId;
+    private final PaperLuckPermsTitles titles;
+    private final java.util.function.Predicate<java.util.UUID> vanished;
     private final double radius;
     private final List<String> broadcastLines;
     private final Object decisionService;
@@ -37,6 +39,8 @@ final class PaperAntiRedstoneAdapter implements AutoCloseable {
         CctLogger logger,
         PaperMessages messages,
         PaperNetworkChat networkChat,
+        PaperLuckPermsTitles titles,
+        java.util.function.Predicate<java.util.UUID> vanished,
         String serverId,
         double radius,
         List<String> broadcastLines,
@@ -49,6 +53,8 @@ final class PaperAntiRedstoneAdapter implements AutoCloseable {
         this.messages = messages;
         this.networkChat = networkChat;
         this.serverId = serverId;
+        this.titles = titles;
+        this.vanished = vanished;
         this.radius = radius;
         this.broadcastLines = broadcastLines;
         this.decisionService = decisionService;
@@ -61,6 +67,8 @@ final class PaperAntiRedstoneAdapter implements AutoCloseable {
         CctLogger logger,
         PaperMessages messages,
         PaperNetworkChat networkChat,
+        PaperLuckPermsTitles titles,
+        java.util.function.Predicate<java.util.UUID> vanished,
         String serverId
     ) {
         File configFile = new File(plugin.getDataFolder(), "anti-redstone.yml");
@@ -128,7 +136,7 @@ final class PaperAntiRedstoneAdapter implements AutoCloseable {
                 }
             );
             PaperAntiRedstoneAdapter adapter = new PaperAntiRedstoneAdapter(
-                plugin, logger, messages, networkChat, serverId, radius,
+                plugin, logger, messages, networkChat, titles, vanished, serverId, radius,
                 List.copyOf(lines), decisionService, notificationField, original
             );
             installed[0] = adapter;
@@ -172,8 +180,9 @@ final class PaperAntiRedstoneAdapter implements AutoCloseable {
         double maximum = radius * radius;
         List<String> names = location.getWorld().getPlayers().stream()
             .filter(Player::isOnline)
+            .filter(player -> !vanished.test(player.getUniqueId()))
             .filter(player -> player.getLocation().distanceSquared(location) <= maximum)
-            .map(Player::getName)
+            .map(titles::playerIdentityLegacy)
             .sorted(Comparator.naturalOrder())
             .toList();
         return names.isEmpty() ? "无" : String.join(", ", names);
