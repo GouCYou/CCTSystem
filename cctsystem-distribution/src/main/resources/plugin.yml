@@ -54,6 +54,7 @@ permissions:
   cctsystem.reward.mvpp:
     default: false
 softdepend:
+  - StrikePractice
   - AuthMe
   - PlayerPoints
   - Vault

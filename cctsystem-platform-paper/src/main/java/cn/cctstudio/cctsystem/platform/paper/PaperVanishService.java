@@ -55,6 +55,8 @@ final class PaperVanishService implements Listener {
     private final Map<UUID, BossBar> bossBars = new ConcurrentHashMap<>();
     private final Set<UUID> cctNightVision = ConcurrentHashMap.newKeySet();
     private final PaperCmiAfkAdapter cmiAfk;
+    private final PaperPracticeAdapter practice;
+    private final Map<UUID, Set<UUID>> revealedFighters = new ConcurrentHashMap<>();
 
     PaperVanishService(
         JavaPlugin plugin,
@@ -76,6 +78,10 @@ final class PaperVanishService implements Listener {
             plugin, PaperNetworkChat.CHANNEL
         );
         cmiAfk = PaperCmiAfkAdapter.install(plugin, vanished::contains, logger);
+        practice = PaperPracticeAdapter.install(plugin);
+        if (practice != null) {
+            plugin.getServer().getScheduler().runTaskTimer(plugin, this::refreshFightVisibility, 1L, 1L);
+        }
     }
 
     void toggle(Player player) {
@@ -139,11 +145,17 @@ final class PaperVanishService implements Listener {
         if (vanished.contains(event.getPlayer().getUniqueId())) event.quitMessage(null);
         BossBar bar = bossBars.remove(event.getPlayer().getUniqueId());
         if (bar != null) event.getPlayer().hideBossBar(bar);
+        vanished.remove(event.getPlayer().getUniqueId());
+        pendingLogin.remove(event.getPlayer().getUniqueId());
+        revealedFighters.remove(event.getPlayer().getUniqueId());
+        revealedFighters.values().forEach(viewers -> viewers.remove(event.getPlayer().getUniqueId()));
+        cctNightVision.remove(event.getPlayer().getUniqueId());
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onContainer(PlayerInteractEvent event) {
         if (!vanished.contains(event.getPlayer().getUniqueId())
+            || practice != null && practice.isFighting(event.getPlayer())
             || event.getAction() != Action.RIGHT_CLICK_BLOCK
             || event.getClickedBlock() == null
             || !(event.getClickedBlock().getState() instanceof Container container)) return;
@@ -202,6 +214,7 @@ final class PaperVanishService implements Listener {
             }
         } else {
             vanished.remove(player.getUniqueId());
+            revealedFighters.remove(player.getUniqueId());
             for (Player viewer : plugin.getServer().getOnlinePlayers()) {
                 viewer.showPlayer(plugin, player);
             }
@@ -219,7 +232,32 @@ final class PaperVanishService implements Listener {
 
     private void hideFrom(Player viewer, Player target) {
         if (viewer.getUniqueId().equals(target.getUniqueId())) return;
-        if (!viewer.hasPermission("cctsystem.vanish.see")) viewer.hidePlayer(plugin, target);
+        if (viewer.hasPermission("cctsystem.vanish.see")) return;
+        if (practice != null && practice.canSeeFighter(viewer, target)) {
+            viewer.showPlayer(plugin, target);
+            viewer.unlistPlayer(target);
+            revealedFighters.computeIfAbsent(target.getUniqueId(), ignored -> ConcurrentHashMap.newKeySet())
+                .add(viewer.getUniqueId());
+        } else viewer.hidePlayer(plugin, target);
+    }
+
+    private void refreshFightVisibility() {
+        practice.refresh();
+        for (UUID uuid : vanished) {
+            Player target = plugin.getServer().getPlayer(uuid);
+            if (target == null) continue;
+            if (practice.isFighting(target) && cctNightVision.remove(uuid)) {
+                target.removePotionEffect(PotionEffectType.NIGHT_VISION);
+            }
+            Set<UUID> shown = revealedFighters.computeIfAbsent(uuid, ignored -> ConcurrentHashMap.newKeySet());
+            for (Player viewer : plugin.getServer().getOnlinePlayers()) {
+                if (viewer == target || viewer.hasPermission("cctsystem.vanish.see")) continue;
+                boolean reveal = practice.canSeeFighter(viewer, target);
+                if (reveal && shown.add(viewer.getUniqueId())) viewer.showPlayer(plugin, target);
+                if (reveal) viewer.unlistPlayer(target);
+                else if (shown.remove(viewer.getUniqueId())) viewer.hidePlayer(plugin, target);
+            }
+        }
     }
 
     private void sendState(Player player, boolean enabled) {
