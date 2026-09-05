@@ -65,6 +65,7 @@ chat:
     survival: "生存"
     creative: "创造"
     login: "登录"
+    duel: "决斗"
 
 nickname:
   usage: "&7使用 /nick [random|rank <等级>|skin <RESET/RANDOM/REAL>|reuse|reset]"
