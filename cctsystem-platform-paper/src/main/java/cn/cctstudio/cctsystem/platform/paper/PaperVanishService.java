@@ -21,12 +21,14 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import net.kyori.adventure.bossbar.BossBar;
 import net.kyori.adventure.text.format.TextDecoration;
+import org.bukkit.Material;
 import org.bukkit.block.Container;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
+import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
@@ -163,6 +165,27 @@ final class PaperVanishService implements Listener {
         }
         holder.inventory.setContents(copies);
         event.getPlayer().openInventory(holder.inventory);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onPickup(EntityPickupItemEvent event) {
+        if (event.getEntity() instanceof Player player
+            && vanished.contains(player.getUniqueId())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onPhysicalTrigger(PlayerInteractEvent event) {
+        if (!vanished.contains(event.getPlayer().getUniqueId())
+            || event.getAction() != Action.PHYSICAL
+            || event.getClickedBlock() == null) return;
+        Material type = event.getClickedBlock().getType();
+        if (type == Material.TRIPWIRE
+            || type == Material.TRIPWIRE_HOOK
+            || type.name().endsWith("_PRESSURE_PLATE")) {
+            event.setCancelled(true);
+        }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)

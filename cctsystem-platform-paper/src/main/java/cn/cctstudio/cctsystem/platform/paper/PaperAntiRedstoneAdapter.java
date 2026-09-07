@@ -9,6 +9,8 @@ import java.lang.reflect.Proxy;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.function.Predicate;
 import org.bukkit.Location;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
@@ -25,6 +27,8 @@ final class PaperAntiRedstoneAdapter implements AutoCloseable {
     private final CctLogger logger;
     private final PaperMessages messages;
     private final PaperNetworkChat networkChat;
+    private final PaperLuckPermsTitles titles;
+    private final Predicate<UUID> vanished;
     private final String serverId;
     private final double radius;
     private final List<String> broadcastLines;
@@ -37,6 +41,8 @@ final class PaperAntiRedstoneAdapter implements AutoCloseable {
         CctLogger logger,
         PaperMessages messages,
         PaperNetworkChat networkChat,
+        PaperLuckPermsTitles titles,
+        Predicate<UUID> vanished,
         String serverId,
         double radius,
         List<String> broadcastLines,
@@ -48,6 +54,8 @@ final class PaperAntiRedstoneAdapter implements AutoCloseable {
         this.logger = logger;
         this.messages = messages;
         this.networkChat = networkChat;
+        this.titles = titles;
+        this.vanished = vanished;
         this.serverId = serverId;
         this.radius = radius;
         this.broadcastLines = broadcastLines;
@@ -61,6 +69,8 @@ final class PaperAntiRedstoneAdapter implements AutoCloseable {
         CctLogger logger,
         PaperMessages messages,
         PaperNetworkChat networkChat,
+        PaperLuckPermsTitles titles,
+        Predicate<UUID> vanished,
         String serverId
     ) {
         File configFile = new File(plugin.getDataFolder(), "anti-redstone.yml");
@@ -102,9 +112,9 @@ final class PaperAntiRedstoneAdapter implements AutoCloseable {
             double radius = Math.max(1.0, Math.min(128.0, config.getDouble("nearby-radius", 20.0)));
             List<String> lines = config.getStringList("broadcast");
             if (lines.isEmpty()) lines = List.of(
-                "&c&l[高频红石警告] &c检测到高频红石装置，已自动清除并上报。",
+                "&c&l检测到高频红石装置，已自动清除并上报管理员。",
                 "&7服务器：&f{server}  &7世界：&f{world}  &7坐标：&f{x}, {y}, {z}",
-                "&7附近玩家（{radius} 格）：&f{players}",
+                "&7附近玩家：&f{players}",
                 "&e请勿搭建高频红石装置，再次发现可能导致账户被封停。"
             );
             final PaperAntiRedstoneAdapter[] installed = new PaperAntiRedstoneAdapter[1];
@@ -128,7 +138,7 @@ final class PaperAntiRedstoneAdapter implements AutoCloseable {
                 }
             );
             PaperAntiRedstoneAdapter adapter = new PaperAntiRedstoneAdapter(
-                plugin, logger, messages, networkChat, serverId, radius,
+                plugin, logger, messages, networkChat, titles, vanished, serverId, radius,
                 List.copyOf(lines), decisionService, notificationField, original
             );
             installed[0] = adapter;
@@ -172,11 +182,12 @@ final class PaperAntiRedstoneAdapter implements AutoCloseable {
         double maximum = radius * radius;
         List<String> names = location.getWorld().getPlayers().stream()
             .filter(Player::isOnline)
+            .filter(player -> !vanished.test(player.getUniqueId()))
             .filter(player -> player.getLocation().distanceSquared(location) <= maximum)
-            .map(Player::getName)
+            .map(titles::playerIdentityLegacy)
             .sorted(Comparator.naturalOrder())
             .toList();
-        return names.isEmpty() ? "无" : String.join(", ", names);
+        return names.isEmpty() ? "无" : String.join("&7, ", names);
     }
 
     private static String replace(String source, Map<String, String> values) {

@@ -13,27 +13,27 @@ items:
     action: PROFILE
   free:
     slot: 20
-    material: CHEST_MINECART
+    material: ENDER_CHEST
     action: CLAIM_REWARD
     value: free
   vip:
     slot: 21
-    material: CHEST_MINECART
+    material: ENDER_CHEST
     action: CLAIM_REWARD
     value: vip
   vipp:
     slot: 22
-    material: CHEST_MINECART
+    material: ENDER_CHEST
     action: CLAIM_REWARD
     value: vipp
   mvp:
     slot: 23
-    material: CHEST_MINECART
+    material: ENDER_CHEST
     action: CLAIM_REWARD
     value: mvp
   mvpp:
     slot: 24
-    material: CHEST_MINECART
+    material: ENDER_CHEST
     action: CLAIM_REWARD
     value: mvpp
   daily:

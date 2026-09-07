@@ -8,13 +8,16 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 /** Optional TAB 6 adapter. Keeps anonymous profile, tab list and nametag in one identity. */
 final class PaperTabIntegration {
+    private final JavaPlugin plugin;
     private final CctLogger logger;
     private final Object api;
     private final Object tabList;
     private final Object nameTags;
+    private final Object sorting;
     private final Method getPlayer;
     private final Method isLoaded;
     private final Method setExpectedProfileName;
+    private final Method getExpectedProfileName;
     private final Method tabSetPrefix;
     private final Method tabSetName;
     private final Method tabSetSuffix;
@@ -24,16 +27,22 @@ final class PaperTabIntegration {
     private final Method tagSetSuffix;
     private final Method tagOriginalPrefix;
     private final Method tagOriginalSuffix;
+    private final Method sortingForceTeamName;
+    private final Method sortingOriginalTeamName;
+    private final Method sortingForcedTeamName;
     private volatile boolean failureLogged;
 
     PaperTabIntegration(JavaPlugin plugin, CctLogger logger) {
+        this.plugin = plugin;
         this.logger = logger;
         Object foundApi = null;
         Object foundTabList = null;
         Object foundNameTags = null;
+        Object foundSorting = null;
         Method foundGetPlayer = null;
         Method foundIsLoaded = null;
         Method foundExpectedName = null;
+        Method foundGetExpectedName = null;
         Method foundTabSetPrefix = null;
         Method foundTabSetName = null;
         Method foundTabSetSuffix = null;
@@ -43,6 +52,9 @@ final class PaperTabIntegration {
         Method foundTagSetSuffix = null;
         Method foundTagOriginalPrefix = null;
         Method foundTagOriginalSuffix = null;
+        Method foundSortingForceTeamName = null;
+        Method foundSortingOriginalTeamName = null;
+        Method foundSortingForcedTeamName = null;
         if (plugin.getServer().getPluginManager().isPluginEnabled("TAB")) {
             try {
                 Class<?> apiType = Class.forName("me.neznamy.tab.api.TabAPI");
@@ -53,14 +65,19 @@ final class PaperTabIntegration {
                 Class<?> nameTagType = Class.forName(
                     "me.neznamy.tab.api.nametag.NameTagManager"
                 );
+                Class<?> sortingType = Class.forName(
+                    "me.neznamy.tab.api.tablist.SortingManager"
+                );
                 foundApi = apiType.getMethod("getInstance").invoke(null);
                 foundGetPlayer = apiType.getMethod("getPlayer", UUID.class);
                 foundTabList = apiType.getMethod("getTabListFormatManager").invoke(foundApi);
                 foundNameTags = apiType.getMethod("getNameTagManager").invoke(foundApi);
+                foundSorting = apiType.getMethod("getSortingManager").invoke(foundApi);
                 foundIsLoaded = playerType.getMethod("isLoaded");
                 foundExpectedName = playerType.getMethod(
                     "setExpectedProfileName", String.class
                 );
+                foundGetExpectedName = playerType.getMethod("getExpectedProfileName");
                 foundTabSetPrefix = tabListType.getMethod(
                     "setPrefix", playerType, String.class
                 );
@@ -88,6 +105,15 @@ final class PaperTabIntegration {
                 foundTagOriginalSuffix = nameTagType.getMethod(
                     "getOriginalRawSuffix", playerType
                 );
+                foundSortingForceTeamName = sortingType.getMethod(
+                    "forceTeamName", playerType, String.class
+                );
+                foundSortingOriginalTeamName = sortingType.getMethod(
+                    "getOriginalTeamName", playerType
+                );
+                foundSortingForcedTeamName = sortingType.getMethod(
+                    "getForcedTeamName", playerType
+                );
             } catch (ReflectiveOperationException | LinkageError exception) {
                 logger.warn("TAB was found but its API is incompatible", exception);
                 foundApi = null;
@@ -96,9 +122,11 @@ final class PaperTabIntegration {
         this.api = foundApi;
         this.tabList = foundTabList;
         this.nameTags = foundNameTags;
+        this.sorting = foundSorting;
         this.getPlayer = foundGetPlayer;
         this.isLoaded = foundIsLoaded;
         this.setExpectedProfileName = foundExpectedName;
+        this.getExpectedProfileName = foundGetExpectedName;
         this.tabSetPrefix = foundTabSetPrefix;
         this.tabSetName = foundTabSetName;
         this.tabSetSuffix = foundTabSetSuffix;
@@ -108,6 +136,9 @@ final class PaperTabIntegration {
         this.tagSetSuffix = foundTagSetSuffix;
         this.tagOriginalPrefix = foundTagOriginalPrefix;
         this.tagOriginalSuffix = foundTagOriginalSuffix;
+        this.sortingForceTeamName = foundSortingForceTeamName;
+        this.sortingOriginalTeamName = foundSortingOriginalTeamName;
+        this.sortingForcedTeamName = foundSortingForcedTeamName;
     }
 
     boolean apply(Player player, String nickname, String rankPrefix, String rankSuffix) {
@@ -133,6 +164,7 @@ final class PaperTabIntegration {
             tabSetSuffix.invoke(tabList, tabPlayer, tabSuffix);
             tagSetPrefix.invoke(nameTags, tabPlayer, tagPrefix);
             tagSetSuffix.invoke(nameTags, tabPlayer, tagSuffix);
+            refreshSorting(tabPlayer, player.getUniqueId(), nickname);
             return true;
         } catch (ReflectiveOperationException | RuntimeException exception) {
             logOnce("Unable to synchronize nickname with TAB", exception);
@@ -151,9 +183,37 @@ final class PaperTabIntegration {
             tabSetSuffix.invoke(tabList, tabPlayer, (Object) null);
             tagSetPrefix.invoke(nameTags, tabPlayer, (Object) null);
             tagSetSuffix.invoke(nameTags, tabPlayer, (Object) null);
+            refreshSorting(tabPlayer, player.getUniqueId(), player.getName());
         } catch (ReflectiveOperationException | RuntimeException exception) {
             logOnce("Unable to restore TAB identity", exception);
         }
+    }
+
+    /**
+     * Changing TAB's expected profile name removes and recreates the client-side entry. TAB 6
+     * otherwise keeps the old scoreboard team until its next refresh, which temporarily places
+     * the player above every configured group. Re-applying TAB's own calculated team name forces
+     * an immediate update; the short-lived override is then restored to its previous state.
+     */
+    private void refreshSorting(Object tabPlayer, UUID playerUuid, String expectedName)
+        throws ReflectiveOperationException {
+        if (sorting == null) return;
+        Object previous = sortingForcedTeamName.invoke(sorting, tabPlayer);
+        String calculated = value(sortingOriginalTeamName.invoke(sorting, tabPlayer));
+        if (calculated.isBlank() || calculated.equals(previous)) return;
+        sortingForceTeamName.invoke(sorting, tabPlayer, calculated);
+        plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+            try {
+                Object current = getPlayer.invoke(api, playerUuid);
+                if (current != tabPlayer
+                    || !expectedName.equals(String.valueOf(getExpectedProfileName.invoke(tabPlayer)))) {
+                    return;
+                }
+                sortingForceTeamName.invoke(sorting, tabPlayer, previous);
+            } catch (ReflectiveOperationException | RuntimeException exception) {
+                logOnce("Unable to release TAB sorting refresh", exception);
+            }
+        }, 2L);
     }
 
     private static String replaceAffix(String template, String replacement, boolean prefix) {
@@ -181,7 +241,10 @@ final class PaperTabIntegration {
         }
         String result = replaced.replaceAll("](?=(?:&[0-9A-FK-ORX])*\\[)", "] ")
             .replaceAll("[ \\t]{2,}", " ")
-            .stripTrailing();
+            .stripTrailing()
+            // A default group often contributes only a color code. Do not leave one space
+            // before that invisible code and then append a second separator for the name.
+            .replaceFirst("(?i)[ \\t]+((?:&[0-9A-FK-ORX])*)$", "$1");
         return prefix && hasVisibleText(result) ? result + " " : result;
     }
 

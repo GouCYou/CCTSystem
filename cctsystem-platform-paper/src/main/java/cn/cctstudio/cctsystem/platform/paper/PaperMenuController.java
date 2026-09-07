@@ -111,6 +111,9 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
         String alias,
         String[] arguments
     ) {
+        if (command.getName().equalsIgnoreCase("shout")) {
+            return List.of();
+        }
         if (arguments.length == 1) {
             return List.of("help", "me", "vip", "exchange", "redeem", "shout");
         }
