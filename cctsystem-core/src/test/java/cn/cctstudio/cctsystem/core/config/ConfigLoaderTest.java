@@ -52,4 +52,34 @@ final class ConfigLoaderTest {
 
         assertThrows(ConfigException.class, () -> new ConfigLoader(name -> null).load(config));
     }
+
+    @Test
+    void acceptsVanishInteractionOptionsAndIgnoresFutureFields() throws IOException {
+        Path config = temporaryDirectory.resolve("config.yml");
+        Files.writeString(config, """
+            network-id: cct-main
+            server-id: lobby
+            node-id: lobby-1
+            roles: [gameplay]
+            vanish:
+              block-break: true
+              block-place: true
+              container-interaction: true
+              ender-chest-interaction: true
+              workstation-interaction: true
+              entity-interaction: false
+              physical-interaction: false
+              future-option: true
+            """);
+
+        VanishConfig vanish = new ConfigLoader(name -> null).load(config).vanish();
+
+        assertEquals(true, vanish.blockBreak());
+        assertEquals(true, vanish.blockPlace());
+        assertEquals(true, vanish.containerInteraction());
+        assertEquals(true, vanish.enderChestInteraction());
+        assertEquals(true, vanish.workstationInteraction());
+        assertEquals(false, vanish.entityInteraction());
+        assertEquals(false, vanish.physicalInteraction());
+    }
 }

@@ -26,9 +26,12 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ThreadLocalRandom;
 
 final class JdbcMembershipStore {
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final int TRANSACTION_ATTEMPTS = 3;
+    private static final long DEADLOCK_RETRY_BASE_MILLIS = 25L;
     private static final String ENTITLEMENT_COLUMNS = """
         e.entitlement_id, e.state, e.starts_at, e.expires_at,
         e.remaining_seconds, e.resume_sequence,
@@ -541,14 +544,16 @@ final class JdbcMembershipStore {
             try (Connection connection = database.connection();
                  PreparedStatement query = connection.prepareStatement("""
                     SELECT player_uuid, desired_tier_key, desired_group,
-                           desired_expires_at, desired_version
+                           desired_expires_at, desired_version, status
                     FROM cct_luckperms_projections
-                    WHERE status IN ('PENDING', 'FAILED') AND next_attempt_at <= ?
+                    WHERE (status IN ('PENDING', 'FAILED') AND next_attempt_at <= ?)
+                       OR (status = 'APPLIED' AND next_attempt_at <= DATE_SUB(?, INTERVAL 5 MINUTE))
                     ORDER BY next_attempt_at
                     LIMIT ?
                     """)) {
                 setInstant(query, 1, now);
-                query.setInt(2, limit);
+                setInstant(query, 2, now);
+                query.setInt(3, limit);
                 List<MembershipProjection> projections = new ArrayList<>();
                 try (ResultSet result = query.executeQuery()) {
                     while (result.next()) {
@@ -557,7 +562,8 @@ final class JdbcMembershipStore {
                             result.getString("desired_tier_key"),
                             result.getString("desired_group"),
                             nullableInstant(result, "desired_expires_at"),
-                            result.getLong("desired_version")
+                            result.getLong("desired_version"),
+                            "APPLIED".equals(result.getString("status"))
                         ));
                     }
                 }
@@ -1213,7 +1219,8 @@ final class JdbcMembershipStore {
 
     private void lockState(Connection connection, UUID playerUuid) throws SQLException {
         try (PreparedStatement insert = connection.prepareStatement("""
-            INSERT IGNORE INTO cct_player_membership_state(player_uuid) VALUES (?)
+            INSERT INTO cct_player_membership_state(player_uuid) VALUES (?)
+            ON DUPLICATE KEY UPDATE player_uuid = VALUES(player_uuid)
             """)) {
             insert.setBytes(1, UuidBinary.encode(playerUuid));
             insert.executeUpdate();
@@ -1796,14 +1803,46 @@ final class JdbcMembershipStore {
         boolean autoCommit = connection.getAutoCommit();
         connection.setAutoCommit(false);
         try {
-            T result = action.get();
-            connection.commit();
-            return result;
-        } catch (SQLException | RuntimeException exception) {
-            connection.rollback();
-            throw exception;
+            for (int attempt = 1; ; attempt++) {
+                try {
+                    T result = action.get();
+                    connection.commit();
+                    return result;
+                } catch (SQLException exception) {
+                    connection.rollback();
+                    if (!retryableTransactionFailure(exception) || attempt >= TRANSACTION_ATTEMPTS) {
+                        throw exception;
+                    }
+                    pauseBeforeTransactionRetry(attempt);
+                } catch (RuntimeException exception) {
+                    connection.rollback();
+                    throw exception;
+                }
+            }
         } finally {
             connection.setAutoCommit(autoCommit);
+        }
+    }
+
+    private static boolean retryableTransactionFailure(SQLException exception) {
+        for (SQLException current = exception; current != null; current = current.getNextException()) {
+            if ("40001".equals(current.getSQLState())
+                || current.getErrorCode() == 1213
+                || current.getErrorCode() == 1205) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void pauseBeforeTransactionRetry(int attempt) throws SQLException {
+        long baseDelay = DEADLOCK_RETRY_BASE_MILLIS * (1L << (attempt - 1));
+        long delay = baseDelay + ThreadLocalRandom.current().nextLong(baseDelay + 1L);
+        try {
+            Thread.sleep(delay);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new SQLException("Interrupted while retrying membership transaction", exception);
         }
     }
 

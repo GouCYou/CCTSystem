@@ -16,6 +16,8 @@ public record CctConfig(
     MembershipConfig membership,
     PromotionConfig promotion,
     RedeemCodeConfig redeemCode,
+    ServerListConfig serverList,
+    VanishConfig vanish,
     LinkedHashMap<String, ModuleConfig> modules
 ) {
     public CctConfig {
@@ -38,6 +40,8 @@ public record CctConfig(
         membership = Objects.requireNonNullElseGet(membership, MembershipConfig::defaults);
         promotion = Objects.requireNonNullElseGet(promotion, PromotionConfig::defaults);
         redeemCode = Objects.requireNonNullElseGet(redeemCode, RedeemCodeConfig::defaults);
+        serverList = Objects.requireNonNullElseGet(serverList, ServerListConfig::defaults);
+        vanish = Objects.requireNonNullElseGet(vanish, VanishConfig::cmiDefaults);
         modules = modules == null ? new LinkedHashMap<>() : new LinkedHashMap<>(modules);
     }
 
@@ -66,8 +70,27 @@ public record CctConfig(
             MembershipConfig.defaults(),
             PromotionConfig.defaults(),
             RedeemCodeConfig.defaults(),
+            ServerListConfig.defaults(),
+            VanishConfig.cmiDefaults(),
             modules
         );
+    }
+
+    public CctConfig(
+        String networkId,
+        String serverId,
+        String nodeId,
+        Set<NodeRole> roles,
+        DatabaseConfig database,
+        BridgeConfig bridge,
+        ExchangeConfig exchange,
+        MembershipConfig membership,
+        PromotionConfig promotion,
+        RedeemCodeConfig redeemCode,
+        LinkedHashMap<String, ModuleConfig> modules
+    ) {
+        this(networkId, serverId, nodeId, roles, database, bridge, exchange, membership,
+            promotion, redeemCode, ServerListConfig.defaults(), VanishConfig.cmiDefaults(), modules);
     }
 
     private static String normalize(String value) {

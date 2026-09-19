@@ -8,6 +8,7 @@ record MembershipProjection(
     String desiredTierKey,
     String desiredGroup,
     Instant desiredExpiry,
-    long desiredVersion
+    long desiredVersion,
+    boolean verificationOnly
 ) {
 }

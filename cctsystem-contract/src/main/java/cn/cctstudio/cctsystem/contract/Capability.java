@@ -18,7 +18,9 @@ public enum Capability {
     EXCHANGE_EXECUTE("exchange.execute"),
     MEMBERSHIP_READ("membership.read"),
     MEMBERSHIP_MUTATE("membership.mutate"),
-    REDEEM_EXECUTE("redeem.execute");
+    REDEEM_EXECUTE("redeem.execute"),
+    ADMIN_READ("admin.read"),
+    ADMIN_MUTATE("admin.mutate");
 
     private final String value;
 

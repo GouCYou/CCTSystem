@@ -29,6 +29,7 @@ final class PaperAntiRedstoneAdapter implements AutoCloseable {
     private final PaperNetworkChat networkChat;
     private final PaperLuckPermsTitles titles;
     private final Predicate<UUID> vanished;
+    private final PaperRedstoneIncidentStore incidents;
     private final String serverId;
     private final double radius;
     private final List<String> broadcastLines;
@@ -43,6 +44,7 @@ final class PaperAntiRedstoneAdapter implements AutoCloseable {
         PaperNetworkChat networkChat,
         PaperLuckPermsTitles titles,
         Predicate<UUID> vanished,
+        PaperRedstoneIncidentStore incidents,
         String serverId,
         double radius,
         List<String> broadcastLines,
@@ -56,6 +58,7 @@ final class PaperAntiRedstoneAdapter implements AutoCloseable {
         this.networkChat = networkChat;
         this.titles = titles;
         this.vanished = vanished;
+        this.incidents = incidents;
         this.serverId = serverId;
         this.radius = radius;
         this.broadcastLines = broadcastLines;
@@ -71,6 +74,7 @@ final class PaperAntiRedstoneAdapter implements AutoCloseable {
         PaperNetworkChat networkChat,
         PaperLuckPermsTitles titles,
         Predicate<UUID> vanished,
+        PaperRedstoneIncidentStore incidents,
         String serverId
     ) {
         File configFile = new File(plugin.getDataFolder(), "anti-redstone.yml");
@@ -138,7 +142,7 @@ final class PaperAntiRedstoneAdapter implements AutoCloseable {
                 }
             );
             PaperAntiRedstoneAdapter adapter = new PaperAntiRedstoneAdapter(
-                plugin, logger, messages, networkChat, titles, vanished, serverId, radius,
+                plugin, logger, messages, networkChat, titles, vanished, incidents, serverId, radius,
                 List.copyOf(lines), decisionService, notificationField, original
             );
             installed[0] = adapter;
@@ -172,6 +176,14 @@ final class PaperAntiRedstoneAdapter implements AutoCloseable {
                 + values.get("server") + "/" + values.get("world") + " "
                 + values.get("x") + "," + values.get("y") + "," + values.get("z")
                 + "; nearby players: " + players);
+            incidents.record(
+                serverId,
+                values.get("world"),
+                location.getBlockX(),
+                location.getBlockY(),
+                location.getBlockZ(),
+                players
+            );
         };
         if (plugin.getServer().isPrimaryThread()) task.run();
         else plugin.getServer().getScheduler().runTask(plugin, task);

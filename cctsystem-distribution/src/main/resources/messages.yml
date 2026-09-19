@@ -44,6 +44,9 @@ vanish:
   failed: "&c隐身状态同步失败，请稍后重试"
   bossbar: "&f隐身中"
   silent-container: "&8静默查看"
+  private-messages-disabled: "&e隐身状态下已禁止私聊"
+  fake-quit: "&e{player} 离开了游戏"
+  fake-join: "&e{player} 加入了游戏"
 
 redeem:
   service-unavailable: "&c兑换码服务暂不可用"

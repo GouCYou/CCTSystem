@@ -12,20 +12,23 @@ final class PaperNetworkChat {
     private final JavaPlugin plugin;
     private final PaperMessages messages;
     private final PaperChatStyleProvider chatStyle;
+    private final PaperChatFilter chatFilter;
 
     PaperNetworkChat(
         JavaPlugin plugin,
         PaperMessages messages,
-        PaperChatStyleProvider chatStyle
+        PaperChatStyleProvider chatStyle,
+        PaperChatFilter chatFilter
     ) {
         this.plugin = plugin;
         this.messages = messages;
         this.chatStyle = chatStyle;
+        this.chatFilter = chatFilter;
         plugin.getServer().getMessenger().registerOutgoingPluginChannel(plugin, CHANNEL);
     }
 
     void shout(Player player, String message) {
-        String value = message == null ? "" : message.strip();
+        String value = chatFilter.filter(message == null ? "" : message.strip());
         if (!player.hasPermission("cctsystem.shout")) {
             player.sendMessage(messages.component("commands.no-permission"));
             return;

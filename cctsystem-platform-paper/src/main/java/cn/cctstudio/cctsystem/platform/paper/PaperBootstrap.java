@@ -23,6 +23,7 @@ import cn.cctstudio.cctsystem.membership.MembershipRuntimeModule;
 import cn.cctstudio.cctsystem.membership.RemoteMembershipModule;
 import cn.cctstudio.cctsystem.redeem.RedeemRpcModule;
 import cn.cctstudio.cctsystem.redeem.RedeemRuntimeModule;
+import cn.cctstudio.cctsystem.redeem.RemoteRedeemModule;
 import cn.cctstudio.cctsystem.storage.mysql.DatabaseManager;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -37,6 +38,7 @@ public final class PaperBootstrap extends JavaPlugin {
     private volatile CctRuntime runtime;
     private PaperIdentityExpansion identityExpansion;
     private PaperAntiRedstoneAdapter antiRedstoneAdapter;
+    private PaperMembershipAccessSynchronizer membershipAccessSynchronizer;
 
     public CompletionStage<Void> rewardSocialBinding(UUID playerUuid) {
         CctRuntime current = runtime;
@@ -101,7 +103,11 @@ public final class PaperBootstrap extends JavaPlugin {
             PaperChatStyleProvider chatStyle = new PaperChatStyleProvider(
                 this, messages, titles, nicknames, logger, config.serverId()
             );
-            PaperNetworkChat networkChat = new PaperNetworkChat(this, messages, chatStyle);
+            PaperChatFilter chatFilter = new PaperChatFilter(this, logger);
+            getServer().getPluginManager().registerEvents(chatFilter, this);
+            PaperNetworkChat networkChat = new PaperNetworkChat(
+                this, messages, chatStyle, chatFilter
+            );
             PaperRewardsMenu rewards = new PaperRewardsMenu(
                 this,
                 created.providers(),
@@ -124,10 +130,12 @@ public final class PaperBootstrap extends JavaPlugin {
                 created.executors().blocking(),
                 logger,
                 messages,
-                config.serverId()
+                config.serverId(),
+                config.vanish()
             );
             antiRedstoneAdapter = PaperAntiRedstoneAdapter.install(
                 this, logger, messages, networkChat, titles, vanish::isVanished,
+                new PaperRedstoneIncidentStore(created.providers(), created.executors(), logger),
                 config.serverId()
             );
             getServer().getPluginManager().registerEvents(vanish, this);
@@ -198,6 +206,14 @@ public final class PaperBootstrap extends JavaPlugin {
                 new PaperIdentityListener(this, created.providers(), logger),
                 this
             );
+            if (luckPermsRegistration != null) {
+                membershipAccessSynchronizer = new PaperMembershipAccessSynchronizer(
+                    this,
+                    created.providers(),
+                    logger,
+                    luckPermsRegistration.getProvider()
+                );
+            }
             runtime = created;
             created.start().whenComplete((ignored, throwable) -> {
                 if (throwable == null) {
@@ -224,6 +240,9 @@ public final class PaperBootstrap extends JavaPlugin {
         PaperAntiRedstoneAdapter redstoneAdapter = antiRedstoneAdapter;
         antiRedstoneAdapter = null;
         if (redstoneAdapter != null) redstoneAdapter.close();
+        PaperMembershipAccessSynchronizer accessSynchronizer = membershipAccessSynchronizer;
+        membershipAccessSynchronizer = null;
+        if (accessSynchronizer != null) accessSynchronizer.close();
         CctRuntime existing = runtime;
         runtime = null;
         if (existing == null) {
@@ -355,5 +374,7 @@ public final class PaperBootstrap extends JavaPlugin {
         created.registerModule(new RemoteMembershipModule());
         created.registerModule(new RedeemRuntimeModule());
         created.registerModule(new RedeemRpcModule());
+        created.registerModule(new RemoteRedeemModule());
+        created.registerModule(new PaperAdminRpcModule(this));
     }
 }

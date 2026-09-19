@@ -170,6 +170,41 @@ final class JdbcMembershipServiceIntegrationTest {
     }
 
     @Test
+    void upgradeCreditOnlyConsumesTheCurrentlyActiveRank() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        service.purchase(request(playerUuid, "vip", UpgradeMode.NONE, "single-credit-vip"))
+            .toCompletableFuture().get(5, TimeUnit.SECONDS);
+        service.purchase(request(playerUuid, "vip_plus", UpgradeMode.PAUSE, "single-credit-vip-plus"))
+            .toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+        MembershipQuote quote = service.quote(playerUuid, "mvp", 1, UpgradeMode.CREDIT)
+            .toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+        assertEquals(160, quote.upgradeCreditPoints());
+        assertEquals(240, quote.finalPricePoints());
+        MembershipSummary beforePurchase = service.summary(playerUuid)
+            .toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertEquals(1, beforePurchase.paused().size());
+        assertEquals("vip", beforePurchase.paused().getFirst().tier().key());
+    }
+
+    @Test
+    void discountedUpgradeSucceedsWhenBalanceCoversFinalPriceButNotListPrice() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        service.purchase(request(playerUuid, "vip", UpgradeMode.NONE, "final-price-vip"))
+            .toCompletableFuture().get(5, TimeUnit.SECONDS);
+        points.balance = 320;
+
+        MembershipOrderResult result = service.purchase(
+            request(playerUuid, "mvp", UpgradeMode.CREDIT, "final-price-mvp")
+        ).toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+        assertEquals(MembershipOrderStatus.COMPLETED, result.status());
+        assertEquals(320, result.finalPricePoints());
+        assertEquals(0, points.balance);
+    }
+
+    @Test
     void requestedPointDebitBecomesReviewRequiredAfterRestart() throws Exception {
         UUID playerUuid = UUID.randomUUID();
         MembershipQuote quote = service.quote(playerUuid, "vip", 1, UpgradeMode.NONE)
@@ -226,6 +261,19 @@ final class JdbcMembershipServiceIntegrationTest {
         assertEquals(null, summary.active());
         assertEquals("vip", summary.paused().getFirst().tier().key());
         assertEquals(7L * 86_400L, summary.paused().getFirst().remainingSeconds());
+    }
+
+    @Test
+    void concurrentSummaryReconciliationForTheSamePlayerCompletesWithoutDeadlock() throws Exception {
+        UUID playerUuid = UUID.randomUUID();
+        List<CompletableFuture<MembershipSummary>> requests = java.util.stream.IntStream.range(0, 24)
+            .mapToObj(ignored -> service.summary(playerUuid).toCompletableFuture())
+            .toList();
+
+        CompletableFuture.allOf(requests.toArray(CompletableFuture[]::new))
+            .get(10, TimeUnit.SECONDS);
+
+        assertTrue(requests.stream().allMatch(request -> request.join().active() == null));
     }
 
     @Test

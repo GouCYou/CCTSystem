@@ -30,7 +30,8 @@ final class MigrationRunner {
         new Migration(9, "membership_credit_before_prior_credit", "/db/migration/V9__membership_credit_before_prior_credit.sql"),
         new Migration(10, "social_binding_rewards", "/db/migration/V10__social_binding_rewards.sql"),
         new Migration(11, "qq_binding_challenges", "/db/migration/V11__qq_binding_challenges.sql"),
-        new Migration(12, "membership_access_pause", "/db/migration/V12__membership_access_pause.sql")
+        new Migration(12, "membership_access_pause", "/db/migration/V12__membership_access_pause.sql"),
+        new Migration(13, "web_admin", "/db/migration/V13__web_admin.sql")
     );
 
     private final DataSource dataSource;

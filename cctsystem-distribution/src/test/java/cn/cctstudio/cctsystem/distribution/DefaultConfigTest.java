@@ -30,5 +30,6 @@ final class DefaultConfigTest {
         assertEquals("vipp", config.membership().tiers().get(1).luckPermsGroup());
         assertEquals(365, config.membership().maxPurchaseDays());
         assertEquals(12, config.redeemCode().length());
+        assertEquals("CCTStudio 1.21 - 26.2", config.serverList().versionName());
     }
 }

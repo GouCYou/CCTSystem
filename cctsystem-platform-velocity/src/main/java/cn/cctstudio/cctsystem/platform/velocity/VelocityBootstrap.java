@@ -10,6 +10,7 @@ import cn.cctstudio.cctsystem.core.CctRuntime;
 import cn.cctstudio.cctsystem.core.config.CctConfig;
 import cn.cctstudio.cctsystem.core.config.ConfigLoader;
 import cn.cctstudio.cctsystem.core.config.MembershipTierConfig;
+import cn.cctstudio.cctsystem.core.filter.ReloadingChatFilter;
 import cn.cctstudio.cctsystem.identity.IdentityModule;
 import cn.cctstudio.cctsystem.identity.IdentityProvider;
 import cn.cctstudio.cctsystem.storage.mysql.DatabaseManager;
@@ -32,6 +33,7 @@ import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
 import com.velocitypowered.api.proxy.ServerConnection;
+import com.velocitypowered.api.proxy.server.ServerPing;
 import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.io.IOException;
@@ -80,6 +82,7 @@ public final class VelocityBootstrap {
     private final VelocityLogger logger;
     private final Set<UUID> vanished = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final Map<UUID, Instant> shoutCooldowns = new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile ReloadingChatFilter chatFilter;
     private volatile CctRuntime runtime;
 
     @Inject
@@ -94,6 +97,11 @@ public final class VelocityBootstrap {
         try {
             proxy.getChannelRegistrar().register(NETWORK_CHANNEL);
             CctConfig config = new ConfigLoader().load(prepareConfig());
+            chatFilter = new ReloadingChatFilter(
+                dataDirectory.resolve("chat-filter.json"),
+                getClass().getResourceAsStream("/chat-filter.json"),
+                logger
+            );
             CctRuntime created = new CctRuntime(
                 PlatformType.VELOCITY,
                 config,
@@ -157,7 +165,9 @@ public final class VelocityBootstrap {
                 if (rendered.isBlank() || rendered.length() > 4096) return;
                 if (!connection.getPlayer().hasPermission("cctsystem.shout")) return;
                 if (!acquireShoutCooldown(connection.getPlayer(), cooldownMessage)) return;
-                Component component = LEGACY.deserialize(rendered);
+                ReloadingChatFilter currentFilter = chatFilter;
+                String filtered = currentFilter == null ? rendered : currentFilter.filter(rendered);
+                Component component = LEGACY.deserialize(filtered);
                 proxy.getAllPlayers().forEach(player -> player.sendMessage(component));
                 return;
             }
@@ -173,6 +183,8 @@ public final class VelocityBootstrap {
             String identity = input.readUTF();
             String separator = input.readUTF();
             String message = input.readUTF().strip();
+            ReloadingChatFilter currentFilter = chatFilter;
+            if (currentFilter != null) message = currentFilter.filter(message);
             if (message.isEmpty() || message.length() > 200) return;
             if (!connection.getPlayer().hasPermission("cctsystem.shout")) return;
             if (!acquireShoutCooldown(
@@ -243,7 +255,19 @@ public final class VelocityBootstrap {
         int visible = (int) proxy.getAllPlayers().stream()
             .filter(player -> !vanished.contains(player.getUniqueId()))
             .count();
-        event.setPing(event.getPing().asBuilder().onlinePlayers(visible).build());
+        ServerPing current = event.getPing();
+        ServerPing.Builder updated = current.asBuilder().onlinePlayers(visible);
+        CctRuntime existing = runtime;
+        if (existing != null) {
+            String versionName = existing.config().serverList().versionName();
+            if (!versionName.isBlank()) {
+                updated.version(new ServerPing.Version(
+                    current.getVersion().getProtocol(),
+                    versionName
+                ));
+            }
+        }
+        event.setPing(updated.build());
     }
 
     private Path prepareConfig() {
@@ -307,6 +331,7 @@ public final class VelocityBootstrap {
             SkinsRestorerInstaller.install(created);
         }
         created.registerModule(new SkinAvatarRpcModule());
+        created.registerModule(new VelocityAdminRpcModule(proxy, dataDirectory));
     }
 
     private CompletableFuture<com.fasterxml.jackson.databind.JsonNode> networkStatus() {

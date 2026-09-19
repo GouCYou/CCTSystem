@@ -2,6 +2,7 @@ package cn.cctstudio.cctsystem.core.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -26,6 +27,7 @@ public final class ConfigLoader {
     ConfigLoader(Function<String, String> environment) {
         this.environment = Objects.requireNonNull(environment, "environment");
         this.mapper = new ObjectMapper(new YAMLFactory())
+            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
             .setPropertyNamingStrategy(PropertyNamingStrategies.KEBAB_CASE);
     }
 

@@ -83,6 +83,34 @@ final class MembershipProjectionWorker {
     }
 
     private CompletableFuture<Void> deliver(MembershipProjection projection) {
+        if (projection.verificationOnly()) {
+            return verifyOrRepair(projection);
+        }
+        return applyProjection(projection);
+    }
+
+    private CompletableFuture<Void> verifyOrRepair(MembershipProjection projection) {
+        CompletableFuture<Void> verified = new CompletableFuture<>();
+        permissions.matches(
+            projection.playerUuid(),
+            managedGroups,
+            projection.desiredGroup(),
+            projection.desiredExpiry()
+        ).whenComplete((matches, failure) -> {
+            if (failure != null || !Boolean.TRUE.equals(matches)) {
+                applyProjection(projection).whenComplete((ignored, repairFailure) ->
+                    complete(verified, repairFailure)
+                );
+                return;
+            }
+            store.projectionApplied(projection).whenComplete((ignored, updateFailure) ->
+                complete(verified, updateFailure)
+            );
+        });
+        return verified;
+    }
+
+    private CompletableFuture<Void> applyProjection(MembershipProjection projection) {
         CompletableFuture<Void> delivered = new CompletableFuture<>();
         java.util.concurrent.CompletionStage<Void> projectionCall;
         try {
@@ -117,5 +145,10 @@ final class MembershipProjectionWorker {
                 });
         });
         return delivered;
+    }
+
+    private static void complete(CompletableFuture<Void> future, Throwable failure) {
+        if (failure == null) future.complete(null);
+        else future.completeExceptionally(failure);
     }
 }

@@ -89,6 +89,42 @@ redeem-code:
   length: 12
   pepper: ${CCTSYSTEM_REDEEM_PEPPER:-}
 
+# Text shown in the multiplayer server list when the client displays the server version.
+# Leave blank to keep Velocity's generated version name.
+server-list:
+  version-name: "CCTStudio 1.21 - 26.2"
+
+# Persistent network vanish. These defaults mirror CMI's Vanish.Defaults section.
+vanish:
+  damage-to-entity: false
+  player-damage: false
+  item-pickup: false
+  mob-aggro: false
+  interaction: false
+  noisy-chest: false
+  inform-on-leave: false
+  inform-on-join: false
+  night-vision: true
+  bossbar: true
+  afk-commands: false
+  private-messages: false
+  relog-disable: false
+  no-messages: false
+  fake-join-leave: false
+  mob-spawning: false
+  stop-playtime: true
+  sleep-ignore: true
+  join-vanished: false
+  death-messages: false
+  hook-players: false
+  block-break: true
+  block-place: true
+  container-interaction: true
+  ender-chest-interaction: true
+  workstation-interaction: true
+  entity-interaction: false
+  physical-interaction: false
+
 modules:
   identity:
     enabled: auto

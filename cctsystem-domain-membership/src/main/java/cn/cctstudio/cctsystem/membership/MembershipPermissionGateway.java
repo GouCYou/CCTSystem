@@ -12,4 +12,13 @@ public interface MembershipPermissionGateway {
         String desiredGroup,
         Instant desiredExpiry
     );
+
+    default CompletionStage<Boolean> matches(
+        UUID playerUuid,
+        Set<String> managedGroups,
+        String desiredGroup,
+        Instant desiredExpiry
+    ) {
+        return java.util.concurrent.CompletableFuture.completedFuture(false);
+    }
 }

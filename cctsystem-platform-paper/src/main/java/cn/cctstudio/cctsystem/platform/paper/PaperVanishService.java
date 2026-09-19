@@ -3,8 +3,10 @@ package cn.cctstudio.cctsystem.platform.paper;
 import cn.cctstudio.cctsystem.core.concurrent.PlatformTaskExecutor;
 import cn.cctstudio.cctsystem.core.logging.CctLogger;
 import cn.cctstudio.cctsystem.core.provider.ProviderRegistry;
+import cn.cctstudio.cctsystem.core.config.VanishConfig;
 import cn.cctstudio.cctsystem.storage.mysql.DatabaseAccess;
 import cn.cctstudio.cctsystem.storage.mysql.DatabaseProvider;
+import io.papermc.paper.event.player.AsyncChatEvent;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -22,6 +24,7 @@ import java.util.concurrent.Executor;
 import net.kyori.adventure.bossbar.BossBar;
 import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Material;
+import org.bukkit.Statistic;
 import org.bukkit.block.Container;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -29,16 +32,25 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.entity.EntityPickupItemEvent;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.EntityTargetLivingEntityEvent;
+import org.bukkit.event.entity.CreatureSpawnEvent;
+import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerInteractEntityEvent;
+import org.bukkit.event.player.PlayerAttemptPickupItemEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.projectiles.ProjectileSource;
+import org.bukkit.entity.Projectile;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 
@@ -51,10 +63,12 @@ final class PaperVanishService implements Listener {
     private final CctLogger logger;
     private final PaperMessages messages;
     private final String serverId;
+    private final VanishConfig settings;
     private final Set<UUID> vanished = ConcurrentHashMap.newKeySet();
     private final Map<UUID, Boolean> pendingLogin = new ConcurrentHashMap<>();
     private final Map<UUID, CompletableFuture<?>> writes = new ConcurrentHashMap<>();
     private final Map<UUID, BossBar> bossBars = new ConcurrentHashMap<>();
+    private final Map<UUID, Integer> playtimeSnapshots = new ConcurrentHashMap<>();
     private final Set<UUID> cctNightVision = ConcurrentHashMap.newKeySet();
     private final PaperCmiAfkAdapter cmiAfk;
 
@@ -65,7 +79,8 @@ final class PaperVanishService implements Listener {
         Executor blockingExecutor,
         CctLogger logger,
         PaperMessages messages,
-        String serverId
+        String serverId,
+        VanishConfig settings
     ) {
         this.plugin = plugin;
         this.providers = providers;
@@ -74,10 +89,12 @@ final class PaperVanishService implements Listener {
         this.logger = logger;
         this.messages = messages;
         this.serverId = serverId;
+        this.settings = settings;
         plugin.getServer().getMessenger().registerOutgoingPluginChannel(
             plugin, PaperNetworkChat.CHANNEL
         );
         cmiAfk = PaperCmiAfkAdapter.install(plugin, vanished::contains, logger);
+        plugin.getServer().getScheduler().runTaskTimer(plugin, this::freezePlaytime, 20L, 20L);
     }
 
     void toggle(Player player) {
@@ -127,8 +144,17 @@ final class PaperVanishService implements Listener {
     public void onJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
         boolean enabled = pendingLogin.remove(player.getUniqueId()) == Boolean.TRUE;
+        if (!enabled && settings.joinVanished() && player.hasPermission("cctsystem.vanish")) {
+            enabled = true;
+            CompletableFuture.runAsync(
+                () -> persist(player.getUniqueId(), true, "system:join-vanished"), blockingExecutor
+            ).exceptionally(failure -> {
+                logger.warn("Unable to persist join-vanished state for " + player.getUniqueId(), failure);
+                return null;
+            });
+        }
         if (enabled) {
-            event.joinMessage(null);
+            if (!settings.informOnJoin()) event.joinMessage(null);
             apply(player, true, false);
         }
         for (Player target : plugin.getServer().getOnlinePlayers()) {
@@ -138,7 +164,20 @@ final class PaperVanishService implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onQuit(PlayerQuitEvent event) {
-        if (vanished.contains(event.getPlayer().getUniqueId())) event.quitMessage(null);
+        Player player = event.getPlayer();
+        if (vanished.contains(player.getUniqueId()) && !settings.informOnLeave()) {
+            event.quitMessage(null);
+        }
+        if (vanished.contains(player.getUniqueId()) && settings.relogDisable()) {
+            vanished.remove(player.getUniqueId());
+            CompletableFuture.runAsync(
+                () -> persist(player.getUniqueId(), false, "system:relog-disable"),
+                blockingExecutor
+            ).exceptionally(failure -> {
+                logger.warn("Unable to disable vanish on logout for " + player.getUniqueId(), failure);
+                return null;
+            });
+        }
         BossBar bar = bossBars.remove(event.getPlayer().getUniqueId());
         if (bar != null) event.getPlayer().hideBossBar(bar);
     }
@@ -146,6 +185,7 @@ final class PaperVanishService implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onContainer(PlayerInteractEvent event) {
         if (!vanished.contains(event.getPlayer().getUniqueId())
+            || settings.noisyChest()
             || event.getAction() != Action.RIGHT_CLICK_BLOCK
             || event.getClickedBlock() == null
             || !(event.getClickedBlock().getState() instanceof Container container)) return;
@@ -167,17 +207,96 @@ final class PaperVanishService implements Listener {
         event.getPlayer().openInventory(holder.inventory);
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = false)
     public void onPickup(EntityPickupItemEvent event) {
         if (event.getEntity() instanceof Player player
-            && vanished.contains(player.getUniqueId())) {
+            && vanished.contains(player.getUniqueId()) && !settings.itemPickup()) {
             event.setCancelled(true);
         }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = false)
+    public void onPickupAttempt(PlayerAttemptPickupItemEvent event) {
+        if (vanished.contains(event.getPlayer().getUniqueId()) && !settings.itemPickup()) {
+            event.setCancelled(true);
+            event.setFlyAtPlayer(false);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onDamage(EntityDamageByEntityEvent event) {
+        if (event.getEntity() instanceof Player victim
+            && vanished.contains(victim.getUniqueId()) && !settings.playerDamage()) {
+            event.setCancelled(true);
+            return;
+        }
+        Player attacker = attackingPlayer(event);
+        if (attacker != null && vanished.contains(attacker.getUniqueId())
+            && !settings.damageToEntity()) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onMobTarget(EntityTargetLivingEntityEvent event) {
+        if (event.getTarget() instanceof Player player
+            && vanished.contains(player.getUniqueId()) && !settings.mobAggro()) {
+            event.setCancelled(true);
+            event.setTarget(null);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onEntityInteraction(PlayerInteractEntityEvent event) {
+        if (vanished.contains(event.getPlayer().getUniqueId()) && !settings.interaction()) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onDeath(PlayerDeathEvent event) {
+        if (vanished.contains(event.getPlayer().getUniqueId()) && !settings.deathMessages()) {
+            event.deathMessage(null);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onPrivateMessage(PlayerCommandPreprocessEvent event) {
+        if (!vanished.contains(event.getPlayer().getUniqueId()) || settings.privateMessages()) return;
+        String command = event.getMessage().substring(1).split("\\s+", 2)[0]
+            .toLowerCase(java.util.Locale.ROOT);
+        if (Set.of("msg", "message", "tell", "whisper", "w", "reply", "r").contains(command)) {
+            event.setCancelled(true);
+            event.getPlayer().sendActionBar(messages.component("vanish.private-messages-disabled"));
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onChat(AsyncChatEvent event) {
+        if (!settings.noMessages()) return;
+        event.viewers().removeIf(viewer -> viewer instanceof Player player
+            && vanished.contains(player.getUniqueId()));
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onCreatureSpawn(CreatureSpawnEvent event) {
+        if (settings.mobSpawning() || event.getSpawnReason() != CreatureSpawnEvent.SpawnReason.NATURAL) {
+            return;
+        }
+        boolean nearbyVanished = false;
+        boolean nearbyVisible = false;
+        for (Player player : event.getLocation().getWorld().getPlayers()) {
+            if (player.getLocation().distanceSquared(event.getLocation()) > 128.0 * 128.0) continue;
+            if (vanished.contains(player.getUniqueId())) nearbyVanished = true;
+            else nearbyVisible = true;
+        }
+        if (nearbyVanished && !nearbyVisible) event.setCancelled(true);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPhysicalTrigger(PlayerInteractEvent event) {
         if (!vanished.contains(event.getPlayer().getUniqueId())
+            || settings.interaction()
             || event.getAction() != Action.PHYSICAL
             || event.getClickedBlock() == null) return;
         Material type = event.getClickedBlock().getType();
@@ -186,6 +305,15 @@ final class PaperVanishService implements Listener {
             || type.name().endsWith("_PRESSURE_PLATE")) {
             event.setCancelled(true);
         }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onBlockInteraction(PlayerInteractEvent event) {
+        if (!vanished.contains(event.getPlayer().getUniqueId()) || settings.interaction()
+            || event.getClickedBlock() == null || event.getAction() == Action.PHYSICAL) return;
+        if (event.getAction() == Action.RIGHT_CLICK_BLOCK
+            && event.getClickedBlock().getState() instanceof Container) return;
+        event.setCancelled(true);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -201,18 +329,20 @@ final class PaperVanishService implements Listener {
     private void apply(Player player, boolean enabled, boolean notify) {
         if (enabled) {
             vanished.add(player.getUniqueId());
-            cmiAfk.leaveAfkSilently(player);
+            if (!settings.afkCommands()) cmiAfk.leaveAfkSilently(player);
             for (Player viewer : plugin.getServer().getOnlinePlayers()) hideFrom(viewer, player);
-            BossBar bar = BossBar.bossBar(
-                messages.component("vanish.bossbar").decoration(TextDecoration.ITALIC, false),
-                1.0f,
-                BossBar.Color.WHITE,
-                BossBar.Overlay.PROGRESS
-            );
-            BossBar previous = bossBars.put(player.getUniqueId(), bar);
-            if (previous != null) player.hideBossBar(previous);
-            player.showBossBar(bar);
-            if (!player.hasPotionEffect(PotionEffectType.NIGHT_VISION)) {
+            if (settings.bossbar()) {
+                BossBar bar = BossBar.bossBar(
+                    messages.component("vanish.bossbar").decoration(TextDecoration.ITALIC, false),
+                    1.0f,
+                    BossBar.Color.WHITE,
+                    BossBar.Overlay.PROGRESS
+                );
+                BossBar previous = bossBars.put(player.getUniqueId(), bar);
+                if (previous != null) player.hideBossBar(previous);
+                player.showBossBar(bar);
+            }
+            if (settings.nightVision() && !player.hasPotionEffect(PotionEffectType.NIGHT_VISION)) {
                 player.addPotionEffect(new PotionEffect(
                     PotionEffectType.NIGHT_VISION,
                     PotionEffect.INFINITE_DURATION,
@@ -222,6 +352,12 @@ final class PaperVanishService implements Listener {
                     false
                 ));
                 cctNightVision.add(player.getUniqueId());
+            }
+            if (settings.sleepIgnore()) player.setSleepingIgnored(true);
+            if (settings.stopPlaytime()) {
+                playtimeSnapshots.put(
+                    player.getUniqueId(), player.getStatistic(Statistic.PLAY_ONE_MINUTE)
+                );
             }
         } else {
             vanished.remove(player.getUniqueId());
@@ -233,8 +369,19 @@ final class PaperVanishService implements Listener {
             if (cctNightVision.remove(player.getUniqueId())) {
                 player.removePotionEffect(PotionEffectType.NIGHT_VISION);
             }
+            player.setSleepingIgnored(false);
+            playtimeSnapshots.remove(player.getUniqueId());
         }
         sendState(player, enabled);
+        if (notify && settings.fakeJoinLeave()) {
+            net.kyori.adventure.text.Component fake = messages.component(
+                enabled ? "vanish.fake-quit" : "vanish.fake-join",
+                Map.of("player", player.getName())
+            );
+            for (Player viewer : plugin.getServer().getOnlinePlayers()) {
+                if (!viewer.hasPermission("cctsystem.vanish.see")) viewer.sendMessage(fake);
+            }
+        }
         if (notify) player.sendMessage(messages.component(
             enabled ? "vanish.enabled" : "vanish.disabled"
         ));
@@ -242,7 +389,29 @@ final class PaperVanishService implements Listener {
 
     private void hideFrom(Player viewer, Player target) {
         if (viewer.getUniqueId().equals(target.getUniqueId())) return;
+        if (settings.hookPlayers() && vanished.contains(viewer.getUniqueId())) {
+            viewer.showPlayer(plugin, target);
+            return;
+        }
         if (!viewer.hasPermission("cctsystem.vanish.see")) viewer.hidePlayer(plugin, target);
+    }
+
+    private static Player attackingPlayer(EntityDamageByEntityEvent event) {
+        if (event.getDamager() instanceof Player player) return player;
+        if (event.getDamager() instanceof Projectile projectile) {
+            ProjectileSource shooter = projectile.getShooter();
+            if (shooter instanceof Player player) return player;
+        }
+        return null;
+    }
+
+    private void freezePlaytime() {
+        if (!settings.stopPlaytime()) return;
+        for (Map.Entry<UUID, Integer> entry : playtimeSnapshots.entrySet()) {
+            Player player = plugin.getServer().getPlayer(entry.getKey());
+            if (player == null || !player.isOnline() || !vanished.contains(entry.getKey())) continue;
+            player.setStatistic(Statistic.PLAY_ONE_MINUTE, entry.getValue());
+        }
     }
 
     private void sendState(Player player, boolean enabled) {
