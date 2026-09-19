@@ -14,6 +14,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import java.io.IOException;
 import java.lang.reflect.Method;
@@ -25,12 +26,18 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import net.luckperms.api.LuckPerms;
+import net.luckperms.api.LuckPermsProvider;
+import net.luckperms.api.model.user.User;
+import net.luckperms.api.node.NodeType;
 
 final class VelocityAdminRpcModule implements CctModule {
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -66,6 +73,7 @@ final class VelocityAdminRpcModule implements CctModule {
         BridgeRpcRouter router = context.providers().find(BridgeProvider.KEY).orElseThrow();
         router.registerCall("admin.punishments.list", this::listPunishments);
         router.registerCall("admin.punishments.execute", this::executePunishment);
+        router.registerCall("admin.players.online", this::listOnlinePlayers);
         router.registerCall("admin.server.logs", this::serverLogs);
         router.registerCall("admin.server.command", this::serverCommand);
         return CompletableFuture.completedFuture(null);
@@ -114,6 +122,55 @@ final class VelocityAdminRpcModule implements CctModule {
                 .put("action", action)
                 .put("player", player)
                 .put("accepted", accepted));
+    }
+
+    private CompletionStage<JsonNode> listOnlinePlayers(BridgeRpcCall call) {
+        JsonNode payload = objectPayload(call);
+        requireStaff(payload);
+        int page = integer(payload, "page", 1, 100_000);
+        int pageSize = integer(payload, "pageSize", 1, 100);
+        String query = optionalText(payload, "query", 36, "");
+        if (!query.isEmpty() && !query.matches("[A-Za-z0-9_-]{1,36}")) {
+            throw invalid("Invalid player query");
+        }
+        String needle = query.toLowerCase(Locale.ROOT);
+        List<Player> players = proxy.getAllPlayers().stream()
+            .filter(player -> needle.isEmpty()
+                || player.getUsername().toLowerCase(Locale.ROOT).contains(needle)
+                || player.getUniqueId().toString().equalsIgnoreCase(needle))
+            .sorted(Comparator.comparing(Player::getUsername, String.CASE_INSENSITIVE_ORDER))
+            .toList();
+        ObjectNode root = pageRoot(page, pageSize, players.size());
+        ArrayNode items = root.putArray("items");
+        int from = Math.min((page - 1) * pageSize, players.size());
+        int to = Math.min(from + pageSize, players.size());
+        LuckPerms luckPerms;
+        try {
+            luckPerms = LuckPermsProvider.get();
+        } catch (IllegalStateException exception) {
+            throw unavailable("LUCKPERMS_UNAVAILABLE", "LuckPerms is unavailable");
+        }
+        List<CompletableFuture<Void>> lookups = new ArrayList<>();
+        for (Player player : players.subList(from, to)) {
+            ObjectNode item = items.addObject();
+            item.put("playerUuid", player.getUniqueId().toString());
+            item.put("playerName", player.getUsername());
+            item.put("online", true);
+            player.getCurrentServer().ifPresentOrElse(
+                connection -> item.put("serverId", connection.getServerInfo().getName()),
+                () -> item.putNull("serverId")
+            );
+            item.putNull("registeredAt");
+            item.putNull("lastSeenAt");
+            item.putNull("membershipTier");
+            item.putNull("membershipExpiresAt");
+            lookups.add(luckPerms.getUserManager().loadUser(player.getUniqueId()).thenAccept(user -> {
+                item.put("group", displayGroup(user));
+                item.put("staff", isStaff(user));
+            }));
+        }
+        return CompletableFuture.allOf(lookups.toArray(CompletableFuture[]::new))
+            .thenApply(ignored -> root);
     }
 
     private CompletionStage<JsonNode> serverLogs(BridgeRpcCall call) {
@@ -214,6 +271,29 @@ final class VelocityAdminRpcModule implements CctModule {
             .flatMap(container -> container.getInstance())
             .orElseThrow(() -> new ClassNotFoundException("LiteBans is unavailable"));
         return Class.forName(name, true, instance.getClass().getClassLoader());
+    }
+
+    private static boolean isStaff(User user) {
+        if (isStaffGroup(user.getPrimaryGroup())) return true;
+        return user.getNodes(NodeType.INHERITANCE).stream()
+            .filter(node -> node.getValue() && !node.hasExpired())
+            .anyMatch(node -> isStaffGroup(node.getGroupName()));
+    }
+
+    private static String displayGroup(User user) {
+        for (String staff : List.of("owner", "admin", "mod", "helper")) {
+            if (user.getPrimaryGroup().equalsIgnoreCase(staff)
+                || user.getNodes(NodeType.INHERITANCE).stream()
+                    .filter(node -> node.getValue() && !node.hasExpired())
+                    .anyMatch(node -> node.getGroupName().equalsIgnoreCase(staff))) {
+                return staff;
+            }
+        }
+        return user.getPrimaryGroup().toLowerCase(Locale.ROOT);
+    }
+
+    private static boolean isStaffGroup(String group) {
+        return Set.of("owner", "admin", "mod", "helper").contains(group.toLowerCase(Locale.ROOT));
     }
 
     private static List<String> tail(Path path, int lineLimit) throws IOException {

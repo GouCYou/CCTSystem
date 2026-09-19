@@ -11,6 +11,11 @@ import cn.cctstudio.cctsystem.core.module.CctModule;
 import cn.cctstudio.cctsystem.core.module.ModuleContext;
 import cn.cctstudio.cctsystem.core.module.ModuleDescriptor;
 import cn.cctstudio.cctsystem.identity.UuidBinary;
+import cn.cctstudio.cctsystem.membership.AdminMembershipAction;
+import cn.cctstudio.cctsystem.membership.AdminMembershipRequest;
+import cn.cctstudio.cctsystem.membership.MembershipException;
+import cn.cctstudio.cctsystem.membership.MembershipService;
+import cn.cctstudio.cctsystem.membership.MembershipServiceProvider;
 import cn.cctstudio.cctsystem.redeem.GenerateRedeemCodesRequest;
 import cn.cctstudio.cctsystem.redeem.GeneratedRedeemBatch;
 import cn.cctstudio.cctsystem.redeem.RedeemCodeService;
@@ -44,7 +49,11 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import net.luckperms.api.LuckPerms;
+import net.luckperms.api.model.user.User;
+import net.luckperms.api.node.NodeType;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -87,6 +96,8 @@ final class PaperAdminRpcModule implements CctModule {
         router.registerCall("admin.reports.list", this::listReports);
         router.registerCall("admin.reports.update", this::updateReport);
         router.registerCall("admin.redstone.list", this::listRedstoneIncidents);
+        router.registerCall("admin.players.registered", this::listRegisteredPlayers);
+        router.registerCall("admin.players.membership", this::mutatePlayerMembership);
         router.registerCall("admin.server.logs", this::serverLogs);
         router.registerCall("admin.server.command", this::serverCommand);
         router.registerCall("admin.audit.record", this::recordAudit);
@@ -167,6 +178,67 @@ final class PaperAdminRpcModule implements CctModule {
             integer(payload, "page", 1, 100_000),
             integer(payload, "pageSize", 1, 100)
         ));
+    }
+
+    private CompletionStage<JsonNode> listRegisteredPlayers(BridgeRpcCall call) {
+        JsonNode payload = objectPayload(call);
+        requireStaff(payload);
+        int page = integer(payload, "page", 1, 100_000);
+        int pageSize = integer(payload, "pageSize", 1, 100);
+        String query = optionalText(payload, "query", 36, "");
+        if (!query.isEmpty() && !query.matches("[A-Za-z0-9_-]{1,36}")) {
+            throw invalid("Invalid player query");
+        }
+        return databaseTask(database -> registeredPlayers(database, page, pageSize, query))
+            .thenCompose(this::enrichPlayerGroups);
+    }
+
+    private CompletionStage<JsonNode> mutatePlayerMembership(BridgeRpcCall call) {
+        JsonNode payload = objectPayload(call);
+        requireStaff(payload);
+        UUID playerUuid = uuid(payload, "playerUuid");
+        AdminMembershipAction action;
+        try {
+            action = AdminMembershipAction.valueOf(text(payload, "action", 32));
+        } catch (IllegalArgumentException exception) {
+            throw invalid("Invalid membership action");
+        }
+        if (!Set.of(
+            AdminMembershipAction.GRANT,
+            AdminMembershipAction.EXTEND,
+            AdminMembershipAction.REMOVE
+        ).contains(action)) {
+            throw invalid("Invalid membership action");
+        }
+        String tierKey = text(payload, "tierKey", 64).toLowerCase(Locale.ROOT);
+        int days = payload.path("days").asInt(-1);
+        if (!tierKey.matches("[a-z0-9][a-z0-9_-]{1,63}")
+            || (action != AdminMembershipAction.REMOVE && (days < 1 || days > 365))) {
+            throw invalid("Invalid membership values");
+        }
+        MembershipService service = context.providers().find(MembershipServiceProvider.KEY)
+            .orElseThrow(() -> unavailable(
+                "MEMBERSHIP_ADMIN_UNAVAILABLE", "Membership service is unavailable"
+            ));
+        return mapMembershipErrors(luckPerms().getUserManager().loadUser(playerUuid).thenCompose(user -> {
+            if (isStaff(user)) {
+                throw new RpcHandlingException(
+                    "STAFF_TARGET_FORBIDDEN", "Staff accounts cannot be changed here", false
+                );
+            }
+            return service.admin(new AdminMembershipRequest(
+                action,
+                playerUuid,
+                tierKey,
+                action == AdminMembershipAction.REMOVE ? 0 : days,
+                null,
+                text(payload, "actor", 80),
+                text(payload, "reason", 255)
+            ));
+        }).thenApply(summary -> JSON.createObjectNode()
+            .put("updated", true)
+            .put("playerUuid", playerUuid.toString())
+            .put("action", action.name())));
     }
 
     private CompletionStage<JsonNode> serverLogs(BridgeRpcCall call) {
@@ -441,6 +513,151 @@ final class PaperAdminRpcModule implements CctModule {
             }
         }
         return root;
+    }
+
+    private ObjectNode registeredPlayers(
+        DatabaseAccess database,
+        int page,
+        int pageSize,
+        String search
+    ) throws SQLException {
+        UUID exactUuid = parseUuid(search);
+        String where = search.isEmpty() ? ""
+            : exactUuid == null ? " WHERE p.normalized_name LIKE ?" : " WHERE p.player_uuid = ?";
+        long total;
+        try (Connection connection = database.connection();
+             PreparedStatement count = connection.prepareStatement(
+                 "SELECT COUNT(*) FROM cct_players p" + where
+             )) {
+            bindPlayerSearch(count, exactUuid, search);
+            try (ResultSet result = count.executeQuery()) {
+                result.next();
+                total = result.getLong(1);
+            }
+        }
+        ObjectNode root = pageRoot(page, pageSize, total);
+        ArrayNode items = root.putArray("items");
+        try (Connection connection = database.connection();
+             PreparedStatement query = connection.prepareStatement("""
+                SELECT p.player_uuid, p.current_name, p.first_seen_at, p.last_seen_at,
+                       e.tier_key AS membership_tier, e.expires_at AS membership_expires_at
+                FROM cct_players p
+                LEFT JOIN cct_player_membership_state s ON s.player_uuid = p.player_uuid
+                LEFT JOIN cct_membership_entitlements e ON e.entitlement_id = s.active_entitlement_id
+                """ + where + " ORDER BY p.last_seen_at DESC LIMIT ? OFFSET ?")) {
+            int index = bindPlayerSearch(query, exactUuid, search);
+            query.setInt(index++, pageSize);
+            query.setInt(index, (page - 1) * pageSize);
+            try (ResultSet result = query.executeQuery()) {
+                while (result.next()) {
+                    ObjectNode item = items.addObject();
+                    item.put("playerUuid", UuidBinary.decode(result.getBytes("player_uuid")).toString());
+                    item.put("playerName", result.getString("current_name"));
+                    item.put("online", false);
+                    item.putNull("serverId");
+                    putInstant(item, "registeredAt", result, "first_seen_at");
+                    putInstant(item, "lastSeenAt", result, "last_seen_at");
+                    putNullable(item, "membershipTier", result.getString("membership_tier"));
+                    putInstant(item, "membershipExpiresAt", result, "membership_expires_at");
+                }
+            }
+        }
+        return root;
+    }
+
+    private CompletionStage<JsonNode> enrichPlayerGroups(JsonNode result) {
+        if (!(result instanceof ObjectNode root) || !(root.path("items") instanceof ArrayNode items)) {
+            return CompletableFuture.failedFuture(unavailable(
+                "PLAYER_LIST_INVALID", "Player list could not be read"
+            ));
+        }
+        LuckPerms luckPerms = luckPerms();
+        List<CompletableFuture<Void>> lookups = new ArrayList<>();
+        for (JsonNode value : items) {
+            ObjectNode item = (ObjectNode) value;
+            UUID playerUuid = UUID.fromString(item.path("playerUuid").asText());
+            lookups.add(luckPerms.getUserManager().loadUser(playerUuid).thenAccept(user -> {
+                String group = displayGroup(user);
+                item.put("group", group);
+                item.put("staff", isStaff(user));
+            }));
+        }
+        return CompletableFuture.allOf(lookups.toArray(CompletableFuture[]::new))
+            .thenApply(ignored -> root);
+    }
+
+    private static CompletionStage<JsonNode> mapMembershipErrors(
+        CompletionStage<? extends JsonNode> operation
+    ) {
+        CompletableFuture<JsonNode> mapped = new CompletableFuture<>();
+        operation.whenComplete((value, failure) -> {
+            if (failure == null) {
+                mapped.complete(value);
+                return;
+            }
+            Throwable cause = failure;
+            while (cause instanceof CompletionException && cause.getCause() != null) {
+                cause = cause.getCause();
+            }
+            if (cause instanceof MembershipException membership) {
+                mapped.completeExceptionally(new RpcHandlingException(
+                    membership.code(), membership.getMessage(), membership.retryable()
+                ));
+            } else {
+                mapped.completeExceptionally(cause);
+            }
+        });
+        return mapped;
+    }
+
+    private LuckPerms luckPerms() {
+        LuckPerms luckPerms = plugin.getServer().getServicesManager().load(LuckPerms.class);
+        if (luckPerms == null) {
+            throw unavailable("LUCKPERMS_UNAVAILABLE", "LuckPerms is unavailable");
+        }
+        return luckPerms;
+    }
+
+    private static boolean isStaff(User user) {
+        if (isStaffGroup(user.getPrimaryGroup())) return true;
+        return user.getNodes(NodeType.INHERITANCE).stream()
+            .filter(node -> node.getValue() && !node.hasExpired())
+            .anyMatch(node -> isStaffGroup(node.getGroupName()));
+    }
+
+    private static String displayGroup(User user) {
+        for (String staff : List.of("owner", "admin", "mod", "helper")) {
+            if (user.getPrimaryGroup().equalsIgnoreCase(staff)
+                || user.getNodes(NodeType.INHERITANCE).stream()
+                    .filter(node -> node.getValue() && !node.hasExpired())
+                    .anyMatch(node -> node.getGroupName().equalsIgnoreCase(staff))) {
+                return staff;
+            }
+        }
+        return user.getPrimaryGroup().toLowerCase(Locale.ROOT);
+    }
+
+    private static boolean isStaffGroup(String group) {
+        return Set.of("owner", "admin", "mod", "helper").contains(group.toLowerCase(Locale.ROOT));
+    }
+
+    private static UUID parseUuid(String value) {
+        try {
+            return value.length() == 36 ? UUID.fromString(value) : null;
+        } catch (IllegalArgumentException exception) {
+            return null;
+        }
+    }
+
+    private static int bindPlayerSearch(
+        PreparedStatement statement,
+        UUID exactUuid,
+        String search
+    ) throws SQLException {
+        if (search.isEmpty()) return 1;
+        if (exactUuid == null) statement.setString(1, "%" + search.toLowerCase(Locale.ROOT) + "%");
+        else statement.setBytes(1, UuidBinary.encode(exactUuid));
+        return 2;
     }
 
     private CompletionStage<JsonNode> databaseTask(DatabaseOperation operation) {
