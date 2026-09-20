@@ -26,10 +26,11 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
-import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -136,23 +137,29 @@ final class VelocityAdminRpcModule implements CctModule {
             throw invalid("Invalid player query");
         }
         String needle = query.toLowerCase(Locale.ROOT);
-        List<Player> players = proxy.getAllPlayers().stream()
-            .filter(player -> needle.isEmpty()
-                || player.getUsername().toLowerCase(Locale.ROOT).contains(needle)
-                || player.getUniqueId().toString().equalsIgnoreCase(needle))
-            .sorted(Comparator.comparing(Player::getUsername, String.CASE_INSENSITIVE_ORDER))
-            .toList();
-        ObjectNode root = pageRoot(page, pageSize, players.size());
-        ArrayNode items = root.putArray("items");
-        int from = Math.min((page - 1) * pageSize, players.size());
-        int to = Math.min(from + pageSize, players.size());
         LuckPerms luckPerms;
         try {
             luckPerms = LuckPermsProvider.get();
         } catch (IllegalStateException exception) {
             throw unavailable("LUCKPERMS_UNAVAILABLE", "LuckPerms is unavailable");
         }
-        List<CompletableFuture<Void>> lookups = new ArrayList<>();
+        Map<UUID, User> users = new HashMap<>();
+        proxy.getAllPlayers().forEach(player -> {
+            User user = luckPerms.getUserManager().getUser(player.getUniqueId());
+            if (user != null) users.put(player.getUniqueId(), user);
+        });
+        List<Player> players = proxy.getAllPlayers().stream()
+            .filter(player -> needle.isEmpty()
+                || player.getUsername().toLowerCase(Locale.ROOT).contains(needle)
+                || player.getUniqueId().toString().equalsIgnoreCase(needle))
+            .sorted(Comparator
+                .comparingInt((Player player) -> groupPriority(users.get(player.getUniqueId())))
+                .thenComparing(Player::getUsername, String.CASE_INSENSITIVE_ORDER))
+            .toList();
+        ObjectNode root = pageRoot(page, pageSize, players.size());
+        ArrayNode items = root.putArray("items");
+        int from = Math.min((page - 1) * pageSize, players.size());
+        int to = Math.min(from + pageSize, players.size());
         for (Player player : players.subList(from, to)) {
             ObjectNode item = items.addObject();
             item.put("playerUuid", player.getUniqueId().toString());
@@ -166,13 +173,11 @@ final class VelocityAdminRpcModule implements CctModule {
             item.putNull("lastSeenAt");
             item.putNull("membershipTier");
             item.putNull("membershipExpiresAt");
-            lookups.add(luckPerms.getUserManager().loadUser(player.getUniqueId()).thenAccept(user -> {
-                item.put("group", displayGroup(user));
-                item.put("staff", isStaff(user));
-            }));
+            User user = users.get(player.getUniqueId());
+            item.put("group", user == null ? "default" : displayGroup(user));
+            item.put("staff", user != null && isStaff(user));
         }
-        return CompletableFuture.allOf(lookups.toArray(CompletableFuture[]::new))
-            .thenApply(ignored -> root);
+        return CompletableFuture.completedFuture(root);
     }
 
     private CompletionStage<JsonNode> serverLogs(BridgeRpcCall call) {
@@ -300,6 +305,21 @@ final class VelocityAdminRpcModule implements CctModule {
             }
         }
         return user.getPrimaryGroup().toLowerCase(Locale.ROOT);
+    }
+
+    private static int groupPriority(User user) {
+        String group = user == null ? "default" : displayGroup(user);
+        return switch (group.toLowerCase(Locale.ROOT).replace('-', '_')) {
+            case "owner" -> 0;
+            case "admin" -> 1;
+            case "mod" -> 2;
+            case "helper" -> 3;
+            case "mvpp", "mvp_plus" -> 4;
+            case "mvp" -> 5;
+            case "vipp", "vip_plus" -> 6;
+            case "vip" -> 7;
+            default -> 8;
+        };
     }
 
     private static boolean isStaffGroup(String group) {
