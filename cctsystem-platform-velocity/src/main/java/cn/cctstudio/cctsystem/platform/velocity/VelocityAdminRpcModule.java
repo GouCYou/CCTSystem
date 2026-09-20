@@ -88,7 +88,9 @@ final class VelocityAdminRpcModule implements CctModule {
         JsonNode payload = objectPayload(call);
         requireStaff(payload);
         String type = optionalText(payload, "type", 16, "bans");
-        if (!type.equals("bans") && !type.equals("kicks")) throw invalid("Invalid punishment type");
+        if (!Set.of("all", "bans", "kicks").contains(type)) {
+            throw invalid("Invalid punishment type");
+        }
         int page = integer(payload, "page", 1, 100_000);
         int pageSize = integer(payload, "pageSize", 1, 100);
         return CompletableFuture.supplyAsync(
@@ -207,23 +209,31 @@ final class VelocityAdminRpcModule implements CctModule {
             if (database == null) throw unavailable("LITEBANS_UNAVAILABLE", "LiteBans is unavailable");
             Method prepare = databaseClass.getMethod("prepareStatement", String.class);
             long total;
-            try (PreparedStatement count = (PreparedStatement) prepare.invoke(
-                    database, "SELECT COUNT(*) FROM litebans_" + type);
+            String countSql = type.equals("all")
+                ? "SELECT (SELECT COUNT(*) FROM litebans_bans) + (SELECT COUNT(*) FROM litebans_kicks)"
+                : "SELECT COUNT(*) FROM litebans_" + type;
+            try (PreparedStatement count = (PreparedStatement) prepare.invoke(database, countSql);
                  ResultSet result = count.executeQuery()) {
                 result.next();
                 total = result.getLong(1);
             }
             ObjectNode root = pageRoot(page, pageSize, total);
             ArrayNode items = root.putArray("items");
-            try (PreparedStatement ids = (PreparedStatement) prepare.invoke(
-                    database, "SELECT id FROM litebans_" + type + " ORDER BY id DESC LIMIT ? OFFSET ?")) {
+            String historySql = type.equals("all")
+                ? "SELECT id, source FROM (SELECT id, time, 'bans' AS source FROM litebans_bans "
+                    + "UNION ALL SELECT id, time, 'kicks' AS source FROM litebans_kicks) history "
+                    + "ORDER BY time DESC LIMIT ? OFFSET ?"
+                : "SELECT id, '" + type + "' AS source FROM litebans_" + type
+                    + " ORDER BY id DESC LIMIT ? OFFSET ?";
+            try (PreparedStatement ids = (PreparedStatement) prepare.invoke(database, historySql)) {
                 ids.setInt(1, pageSize);
                 ids.setInt(2, (page - 1) * pageSize);
                 try (ResultSet rows = ids.executeQuery()) {
-                    Method getEntry = databaseClass.getMethod(
-                        type.equals("bans") ? "getBan" : "getKick", long.class, String.class
-                    );
                     while (rows.next()) {
+                        String source = rows.getString("source");
+                        Method getEntry = databaseClass.getMethod(
+                            source.equals("bans") ? "getBan" : "getKick", long.class, String.class
+                        );
                         Object entry = getEntry.invoke(database, rows.getLong(1), "*");
                         if (entry != null) items.add(entryJson(databaseClass, database, entry));
                     }

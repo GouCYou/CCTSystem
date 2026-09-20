@@ -51,6 +51,8 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import fr.xephi.authme.api.v3.AuthMeApi;
+import fr.xephi.authme.api.v3.AuthMePlayer;
 import net.luckperms.api.LuckPerms;
 import net.luckperms.api.model.user.User;
 import net.luckperms.api.node.NodeType;
@@ -145,11 +147,12 @@ final class PaperAdminRpcModule implements CctModule {
         int page = integer(payload, "page", 1, 100_000);
         int pageSize = integer(payload, "pageSize", 1, 100);
         String status = optionalText(payload, "status", 24, "ALL").toUpperCase(Locale.ROOT);
+        String query = optionalText(payload, "query", 80, "").toLowerCase(Locale.ROOT);
         if (!Set.of("ALL", "OPEN", "IN_PROGRESS", "CLOSED", "FALSE", "DELETED").contains(status)) {
             throw invalid("Invalid report status");
         }
         return CompletableFuture.supplyAsync(
-            () -> reports(page, pageSize, status),
+            () -> reports(page, pageSize, status, query),
             context.executors().blocking()
         );
     }
@@ -376,7 +379,7 @@ final class PaperAdminRpcModule implements CctModule {
         return root;
     }
 
-    private ObjectNode reports(int page, int pageSize, String status) {
+    private ObjectNode reports(int page, int pageSize, String status, String query) {
         try {
             Object storage = playerReportStorage();
             @SuppressWarnings("unchecked")
@@ -385,6 +388,10 @@ final class PaperAdminRpcModule implements CctModule {
             List<Object> filtered = allReports.stream()
                 .filter(entry -> status.equals("ALL")
                     || status.equals(invokeString(method(entry, "status"), entry)))
+                .filter(entry -> query.isEmpty() || List.of(
+                    "reporter", "reporterUuid", "target", "targetUuid", "reason"
+                ).stream().map(field -> invokeString(method(entry, field), entry))
+                    .anyMatch(value -> value.toLowerCase(Locale.ROOT).contains(query)))
                 .toList();
             ObjectNode root = pageRoot(page, pageSize, filtered.size());
             ArrayNode items = root.putArray("items");
@@ -540,11 +547,18 @@ final class PaperAdminRpcModule implements CctModule {
         try (Connection connection = database.connection();
              PreparedStatement query = connection.prepareStatement("""
                 SELECT p.player_uuid, p.current_name, p.first_seen_at, p.last_seen_at,
-                       e.tier_key AS membership_tier, e.expires_at AS membership_expires_at
+                       e.tier_key AS membership_tier, e.expires_at AS membership_expires_at,
+                       lp.primary_group
                 FROM cct_players p
                 LEFT JOIN cct_player_membership_state s ON s.player_uuid = p.player_uuid
                 LEFT JOIN cct_membership_entitlements e ON e.entitlement_id = s.active_entitlement_id
-                """ + where + " ORDER BY p.last_seen_at DESC LIMIT ? OFFSET ?")) {
+                LEFT JOIN luckperms_players lp
+                  ON LOWER(REPLACE(lp.uuid, '-', '')) = LOWER(HEX(p.player_uuid))
+                """ + where + " ORDER BY CASE LOWER(COALESCE(lp.primary_group, 'default'))"
+                + " WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'mod' THEN 2"
+                + " WHEN 'helper' THEN 3 WHEN 'mvpp' THEN 4 WHEN 'mvp_plus' THEN 4"
+                + " WHEN 'mvp' THEN 5 WHEN 'vipp' THEN 6 WHEN 'vip_plus' THEN 6"
+                + " WHEN 'vip' THEN 7 ELSE 8 END, p.current_name ASC LIMIT ? OFFSET ?")) {
             int index = bindPlayerSearch(query, exactUuid, search);
             query.setInt(index++, pageSize);
             query.setInt(index, (page - 1) * pageSize);
@@ -559,6 +573,11 @@ final class PaperAdminRpcModule implements CctModule {
                     putInstant(item, "lastSeenAt", result, "last_seen_at");
                     putNullable(item, "membershipTier", result.getString("membership_tier"));
                     putInstant(item, "membershipExpiresAt", result, "membership_expires_at");
+                    item.put("group", result.getString("primary_group") == null
+                        ? "default" : result.getString("primary_group").toLowerCase(Locale.ROOT));
+                    item.put("staff", false);
+                    item.putNull("lastLoginIp");
+                    item.putNull("lastLoginLocation");
                 }
             }
         }
@@ -580,10 +599,28 @@ final class PaperAdminRpcModule implements CctModule {
                 String group = displayGroup(user);
                 item.put("group", group);
                 item.put("staff", isStaff(user));
+                enrichAuthMe(item);
             }));
         }
         return CompletableFuture.allOf(lookups.toArray(CompletableFuture[]::new))
             .thenApply(ignored -> root);
+    }
+
+    private void enrichAuthMe(ObjectNode item) {
+        try {
+            AuthMePlayer player = AuthMeApi.getInstance()
+                .getPlayerInfo(item.path("playerName").asText()).orElse(null);
+            if (player == null) return;
+            item.put("registeredAt", player.getRegistrationDate().toString());
+            player.getLastLoginDate().ifPresent(value -> item.put("lastSeenAt", value.toString()));
+            player.getLastLoginIpAddress().filter(value -> !value.isBlank())
+                .ifPresentOrElse(
+                    value -> item.put("lastLoginIp", value),
+                    () -> item.putNull("lastLoginIp")
+                );
+        } catch (RuntimeException ignored) {
+            // The registered-player RPC is routed to the AuthMe node. Keep base data if unavailable.
+        }
     }
 
     private static CompletionStage<JsonNode> mapMembershipErrors(
