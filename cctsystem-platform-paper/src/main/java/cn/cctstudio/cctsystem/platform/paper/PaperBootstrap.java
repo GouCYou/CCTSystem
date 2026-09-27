@@ -39,6 +39,7 @@ public final class PaperBootstrap extends JavaPlugin {
     private PaperIdentityExpansion identityExpansion;
     private PaperAntiRedstoneAdapter antiRedstoneAdapter;
     private PaperMembershipAccessSynchronizer membershipAccessSynchronizer;
+    private PaperTitleService titleService;
 
     public CompletionStage<Void> rewardSocialBinding(UUID playerUuid) {
         CctRuntime current = runtime;
@@ -75,6 +76,17 @@ public final class PaperBootstrap extends JavaPlugin {
             PaperLuckPermsTitles titles = new PaperLuckPermsTitles(
                 luckPermsRegistration == null ? null : luckPermsRegistration.getProvider()
             );
+            titleService = new PaperTitleService(
+                this,
+                created.providers(),
+                platformTasks,
+                created.executors().blocking(),
+                logger,
+                messages,
+                titles,
+                luckPermsRegistration == null ? null : luckPermsRegistration.getProvider()
+            );
+            getServer().getPluginManager().registerEvents(titleService, this);
             new PaperRankBenefitSynchronizer(
                 this,
                 luckPermsRegistration == null ? null : luckPermsRegistration.getProvider(),
@@ -92,12 +104,14 @@ public final class PaperBootstrap extends JavaPlugin {
                 titles,
                 config.serverId()
             );
+            titleService.setNicknameService(nicknames);
+            nicknames.setTitleService(titleService);
             getServer().getPluginManager().registerEvents(nicknames, this);
             getServer().getPluginManager().registerEvents(
                 new PaperAnonymousCommandAdapter(nicknames), this
             );
             if (getServer().getPluginManager().isPluginEnabled("PlaceholderAPI")) {
-                identityExpansion = new PaperIdentityExpansion(nicknames);
+                identityExpansion = new PaperIdentityExpansion(nicknames, config.serverId());
                 identityExpansion.register();
             }
             PaperChatStyleProvider chatStyle = new PaperChatStyleProvider(
@@ -105,6 +119,12 @@ public final class PaperBootstrap extends JavaPlugin {
             );
             PaperChatFilter chatFilter = new PaperChatFilter(this, logger);
             getServer().getPluginManager().registerEvents(chatFilter, this);
+            if ("duel".equalsIgnoreCase(config.serverId())
+                || "duels".equalsIgnoreCase(config.serverId())) {
+                getServer().getPluginManager().registerEvents(
+                    new PaperDuelChatRenderer(nicknames), this
+                );
+            }
             PaperNetworkChat networkChat = new PaperNetworkChat(
                 this, messages, chatStyle, chatFilter
             );
@@ -165,7 +185,9 @@ public final class PaperBootstrap extends JavaPlugin {
                 exchangeMenu,
                 titles,
                 messages,
-                menuDefinitions
+                menuDefinitions,
+                titleService,
+                nicknames
             );
             getServer().getPluginManager().registerEvents(membershipMenu, this);
             PaperMenuController menus = new PaperMenuController(
@@ -175,7 +197,8 @@ public final class PaperBootstrap extends JavaPlugin {
                 platformTasks,
                 logger,
                 messages,
-                networkChat
+                networkChat,
+                titleService
             );
             org.bukkit.command.PluginCommand cctCommand = getCommand("cct");
             if (cctCommand != null) {
@@ -197,7 +220,7 @@ public final class PaperBootstrap extends JavaPlugin {
                 cctAdminCommand.setUsage(messages.raw("commands.admin-usage"));
                 PaperPromotionAdminCommand admin = new PaperPromotionAdminCommand(
                     created.providers(), platformTasks, config, logger,
-                    messages, menuDefinitions
+                    messages, menuDefinitions, titleService
                 );
                 cctAdminCommand.setExecutor(admin);
                 cctAdminCommand.setTabCompleter(admin);
@@ -211,13 +234,15 @@ public final class PaperBootstrap extends JavaPlugin {
                     this,
                     created.providers(),
                     logger,
-                    luckPermsRegistration.getProvider()
+                    luckPermsRegistration.getProvider(),
+                    config.membership().purchaseBlockedGroups()
                 );
             }
             runtime = created;
             created.start().whenComplete((ignored, throwable) -> {
                 if (throwable == null) {
                     logger.info("CCTSystem Paper node is ready");
+                    getServer().getScheduler().runTask(this, titleService::start);
                 } else {
                     logger.error("CCTSystem failed to initialize", throwable);
                     getServer().getScheduler().runTask(this, () -> getServer().getPluginManager().disablePlugin(this));
@@ -243,6 +268,9 @@ public final class PaperBootstrap extends JavaPlugin {
         PaperMembershipAccessSynchronizer accessSynchronizer = membershipAccessSynchronizer;
         membershipAccessSynchronizer = null;
         if (accessSynchronizer != null) accessSynchronizer.close();
+        PaperTitleService titles = titleService;
+        titleService = null;
+        if (titles != null) titles.close();
         CctRuntime existing = runtime;
         runtime = null;
         if (existing == null) {

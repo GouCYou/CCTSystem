@@ -371,10 +371,11 @@ public final class VelocityBootstrap {
             String primaryGroup = profilePrimaryGroup(luckPerms, user, membershipGroups());
             result.put("primaryGroup", primaryGroup);
             String customTitle = user.getCachedData().getMetaData().getMetaValue("cct-title");
-            Group group = luckPerms.getGroupManager().getGroup(primaryGroup);
-            String prefix = customTitle == null || customTitle.isBlank()
-                ? group == null ? null : group.getCachedData().getMetaData().getPrefix()
-                : customTitle;
+            boolean hasManagedTitle = user.getNodes(NodeType.PREFIX).stream()
+                .anyMatch(node -> node.getValue() && !node.hasExpired() && node.getPriority() == 10_000);
+            String effectivePrefix = user.getCachedData().getMetaData().getPrefix();
+            String prefix = hasManagedTitle || customTitle == null || customTitle.isBlank()
+                ? effectivePrefix : customTitle;
             if (prefix == null || prefix.isBlank()) {
                 result.putNull("title");
             } else {

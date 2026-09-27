@@ -48,6 +48,7 @@ final class PaperChatStyleProvider {
         } else {
             body = defaultFormat(player, rawMessage);
         }
+        if (isDuelServer()) body = removeDuelLobbyTag(body);
         String serverName = messages.raw("chat.servers." + serverId, serverId);
         String shoutPrefix = messages.raw(
             "chat.shout-prefix", "&f[&6喊话&f] &f[&b{server}&f] "
@@ -130,15 +131,23 @@ final class PaperChatStyleProvider {
     }
 
     private String prefix(Player player) {
-        return nicknames.profile(player).isPresent()
+        String value = nicknames.profile(player).isPresent()
             ? titles.prefixLegacy(nicknames.displayRank(player))
             : titles.prefixLegacy(player);
+        value = value.stripTrailing();
+        return visible(value) ? value + " " : value;
     }
 
     private String suffix(Player player) {
-        return nicknames.profile(player).isPresent()
+        String value = nicknames.profile(player).isPresent()
             ? titles.suffixLegacy(nicknames.displayRank(player))
             : titles.suffixLegacy(player);
+        value = value.stripLeading();
+        return visible(value) ? " " + value : "";
+    }
+
+    private static boolean visible(String value) {
+        return value != null && !value.replaceAll("(?i)&[0-9A-FK-ORX]", "").isBlank();
     }
 
     private String placeholders(Player player, String input) {
@@ -173,6 +182,19 @@ final class PaperChatStyleProvider {
             .replaceAll("](?=(?:&[0-9A-FK-ORX])*\\[)", "] ")
             .replaceAll("[ \\t]{2,}", " ")
             .strip();
+    }
+
+    private boolean isDuelServer() {
+        return "duel".equalsIgnoreCase(serverId) || "duels".equalsIgnoreCase(serverId);
+    }
+
+    private static String removeDuelLobbyTag(String value) {
+        if (value == null) return "";
+        String colors = "(?:&[0-9A-FK-ORX])*";
+        return value.replaceFirst(
+            "(?i)^\\s*" + colors + "\\[" + colors + "lobby" + colors + "\\]\\s*",
+            ""
+        );
     }
 
     private boolean enabled(String pluginName) {

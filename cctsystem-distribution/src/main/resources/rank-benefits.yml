@@ -1,6 +1,6 @@
 # Keeps permission-based benefits aligned with the public Rank table.
 enabled: true
-apply-on-server-ids: [lobby, survival, creative]
+apply-on-server-ids: [lobby, survival, creative, duel]
 
 groups:
   default:
@@ -171,7 +171,21 @@ groups:
     remove-permissions:
       - cmi.command.sethome.8
       - MyPet.petstorage.limit.6
+  helper:
+    add-permissions:
+      - cctsystem.vanish.see
+    remove-permissions: []
+  mod:
+    add-permissions:
+      - cctsystem.vanish.see
+    remove-permissions: []
   admin:
     add-permissions:
       - cctsystem.vanish
+      - cctsystem.vanish.see
+    remove-permissions: []
+  owner:
+    add-permissions:
+      - cctsystem.vanish
+      - cctsystem.vanish.see
     remove-permissions: []

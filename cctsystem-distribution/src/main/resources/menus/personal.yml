@@ -1,4 +1,4 @@
-rows: 3
+rows: 4
 title-key: menus.personal.title
 
 fill:
@@ -23,7 +23,15 @@ items:
     slot: 15
     material: NAME_TAG
     action: REDEEM_HINT
-  close:
+  prefix:
+    slot: 20
+    material: ANVIL
+    action: OPEN_PREFIX
+  nickname:
     slot: 22
+    material: ENDER_EYE
+    action: OPEN_NICKNAME
+  close:
+    slot: 8
     material: BARRIER
     action: CLOSE

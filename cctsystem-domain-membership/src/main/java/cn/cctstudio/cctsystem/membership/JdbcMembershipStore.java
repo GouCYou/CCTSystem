@@ -1218,21 +1218,37 @@ final class JdbcMembershipStore {
     }
 
     private void lockState(Connection connection, UUID playerUuid) throws SQLException {
+        byte[] encodedUuid = UuidBinary.encode(playerUuid);
+        if (stateExists(connection, encodedUuid) && lockExistingState(connection, encodedUuid)) return;
         try (PreparedStatement insert = connection.prepareStatement("""
-            INSERT INTO cct_player_membership_state(player_uuid) VALUES (?)
-            ON DUPLICATE KEY UPDATE player_uuid = VALUES(player_uuid)
+            INSERT IGNORE INTO cct_player_membership_state(player_uuid) VALUES (?)
             """)) {
-            insert.setBytes(1, UuidBinary.encode(playerUuid));
+            insert.setBytes(1, encodedUuid);
             insert.executeUpdate();
         }
+        if (!lockExistingState(connection, encodedUuid)) {
+            throw new SQLException("Membership state row could not be locked");
+        }
+    }
+
+    private boolean stateExists(Connection connection, byte[] encodedUuid) throws SQLException {
+        try (PreparedStatement query = connection.prepareStatement("""
+            SELECT 1 FROM cct_player_membership_state WHERE player_uuid = ?
+            """)) {
+            query.setBytes(1, encodedUuid);
+            try (ResultSet result = query.executeQuery()) {
+                return result.next();
+            }
+        }
+    }
+
+    private boolean lockExistingState(Connection connection, byte[] encodedUuid) throws SQLException {
         try (PreparedStatement lock = connection.prepareStatement("""
             SELECT version FROM cct_player_membership_state WHERE player_uuid = ? FOR UPDATE
             """)) {
-            lock.setBytes(1, UuidBinary.encode(playerUuid));
+            lock.setBytes(1, encodedUuid);
             try (ResultSet result = lock.executeQuery()) {
-                if (!result.next()) {
-                    throw new SQLException("Membership state row could not be locked");
-                }
+                return result.next();
             }
         }
     }

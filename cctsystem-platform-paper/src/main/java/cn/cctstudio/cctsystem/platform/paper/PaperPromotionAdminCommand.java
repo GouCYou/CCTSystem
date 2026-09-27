@@ -46,6 +46,7 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
     private final ZoneId timezone;
     private final PaperMessages messages;
     private final PaperMenus menus;
+    private final PaperTitleService titles;
 
     PaperPromotionAdminCommand(
         ProviderRegistry providers,
@@ -53,7 +54,8 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         CctConfig config,
         CctLogger logger,
         PaperMessages messages,
-        PaperMenus menus
+        PaperMenus menus,
+        PaperTitleService titles
     ) {
         this.providers = providers;
         this.platformTasks = platformTasks;
@@ -61,6 +63,7 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         this.timezone = ZoneId.of(config.promotion().timezone());
         this.messages = messages;
         this.menus = menus;
+        this.titles = titles;
     }
 
     @Override
@@ -90,6 +93,11 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         }
         if (args.length >= 2 && args[0].equalsIgnoreCase("redeem")) {
             redeem(sender, args);
+            return true;
+        }
+        if (args.length >= 2 && (args[0].equalsIgnoreCase("prefix")
+            || args[0].equalsIgnoreCase("suffix"))) {
+            prefix(sender, args);
             return true;
         }
         if (args.length < 2 || !args[0].equalsIgnoreCase("discount")) {
@@ -436,7 +444,14 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         String[] args
     ) {
         if (args.length == 1) {
-            return List.of("help", "reload", "discount", "member", "redeem");
+            return List.of("help", "reload", "discount", "member", "redeem", "prefix", "suffix");
+        }
+        if (args.length == 2 && (args[0].equalsIgnoreCase("prefix")
+            || args[0].equalsIgnoreCase("suffix"))) {
+            return List.of("add", "remove", "list");
+        }
+        if (args.length == 3 && args[0].equalsIgnoreCase("prefix")) {
+            return pluginPlayerNames();
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("redeem")) {
             return List.of("generate");
@@ -506,6 +521,92 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
 
     private void usage(CommandSender sender) {
         messages.components("commands.admin-help").forEach(sender::sendMessage);
+    }
+
+    private void prefix(CommandSender sender, String[] args) {
+        PaperTitleService.AffixType type = PaperTitleService.AffixType.from(args[0]);
+        String action = args[1].toLowerCase(java.util.Locale.ROOT);
+        if (args.length < 3 || !List.of("add", "remove", "list").contains(action)) {
+            usage(sender);
+            return;
+        }
+        IdentityService identities = providers.find(IdentityProvider.KEY).orElse(null);
+        if (identities == null) {
+            sender.sendMessage(messages.component("admin.player-not-found"));
+            return;
+        }
+        String playerName = args[2];
+        identities.findByName(playerName).whenComplete((identity, lookupFailure) -> {
+            if (lookupFailure != null || identity.isEmpty()) {
+                main(() -> sender.sendMessage(messages.component("admin.player-not-found")));
+                return;
+            }
+            UUID uuid = identity.orElseThrow().playerUuid();
+            if (action.equals("add")) {
+                if (args.length < 5) {
+                    main(() -> usage(sender));
+                    return;
+                }
+                try {
+                    int days = Integer.parseInt(args[3]);
+                    String title = String.join(" ", Arrays.copyOfRange(args, 4, args.length));
+                    titles.grant(uuid, playerName, type, title, days, sender.getName())
+                        .whenComplete((id, failure) -> main(() -> {
+                            if (failure != null) {
+                                logger.warn("Unable to grant personal title", failure);
+                                sender.sendMessage(messages.component("admin.prefix-failed"));
+                            } else {
+                                sender.sendMessage(messages.component("admin.prefix-added", Map.of(
+                                    "player", playerName, "title", title, "id", id
+                                )));
+                            }
+                        }));
+                } catch (NumberFormatException exception) {
+                    main(() -> usage(sender));
+                }
+                return;
+            }
+            if (action.equals("remove")) {
+                if (args.length < 4) {
+                    main(() -> usage(sender));
+                    return;
+                }
+                String query = String.join(" ", Arrays.copyOfRange(args, 3, args.length));
+                titles.remove(uuid, type, query).whenComplete((removed, failure) -> main(() -> {
+                    if (failure != null) {
+                        logger.warn("Unable to remove personal title", failure);
+                        sender.sendMessage(messages.component("admin.prefix-failed"));
+                    } else {
+                        sender.sendMessage(messages.component(removed
+                            ? "admin.prefix-removed" : "admin.prefix-not-found", Map.of(
+                                "player", playerName, "title", query
+                            )));
+                    }
+                }));
+                return;
+            }
+            titles.list(uuid, type).whenComplete((entries, failure) -> main(() -> {
+                if (failure != null) {
+                    logger.warn("Unable to list personal titles", failure);
+                    sender.sendMessage(messages.component("admin.prefix-failed"));
+                    return;
+                }
+                sender.sendMessage(messages.component("admin.prefix-list", Map.of(
+                    "player", playerName, "count", entries.size()
+                )));
+                entries.forEach(entry -> sender.sendMessage(messages.component(
+                    "admin.prefix-entry", Map.of(
+                        "id", entry.id(), "title", entry.display(),
+                        "expiry", entry.expiresAt() == null
+                            ? messages.raw("titles.permanent") : entry.expiresAt().toString()
+                    )
+                )));
+            }));
+        });
+    }
+
+    private List<String> pluginPlayerNames() {
+        return org.bukkit.Bukkit.getOnlinePlayers().stream().map(org.bukkit.entity.Player::getName).toList();
     }
 
     private void memberUsage(CommandSender sender) {

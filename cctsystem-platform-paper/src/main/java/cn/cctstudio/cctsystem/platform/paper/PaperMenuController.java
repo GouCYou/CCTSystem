@@ -23,6 +23,7 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
     private final CctLogger logger;
     private final PaperMessages messages;
     private final PaperNetworkChat networkChat;
+    private final PaperTitleService titles;
 
     PaperMenuController(
         PaperMembershipMenu memberships,
@@ -31,7 +32,8 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
         PlatformTaskExecutor platformTasks,
         CctLogger logger,
         PaperMessages messages,
-        PaperNetworkChat networkChat
+        PaperNetworkChat networkChat,
+        PaperTitleService titles
     ) {
         this.memberships = memberships;
         this.exchange = exchange;
@@ -40,6 +42,7 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
         this.logger = logger;
         this.messages = messages;
         this.networkChat = networkChat;
+        this.titles = titles;
     }
 
     @Override
@@ -71,6 +74,9 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
         if (arguments[0].equalsIgnoreCase("vip")) {
             memberships.openMemberships(player);
             return true;
+        }
+        if (arguments[0].equalsIgnoreCase("prefix")) {
+            return titles.command(player, java.util.Arrays.copyOfRange(arguments, 1, arguments.length));
         }
         if (arguments[0].equalsIgnoreCase("exchange")) {
             if (arguments.length == 1) {
@@ -115,7 +121,14 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
             return List.of();
         }
         if (arguments.length == 1) {
-            return List.of("help", "me", "vip", "exchange", "redeem", "shout");
+            return List.of("help", "me", "vip", "prefix", "exchange", "redeem", "shout");
+        }
+        if (arguments.length == 2 && arguments[0].equalsIgnoreCase("prefix")) {
+            return sender instanceof Player player ? titles.completions(player) : List.of();
+        }
+        if (arguments.length == 3 && arguments[0].equalsIgnoreCase("prefix")) {
+            return sender instanceof Player player
+                ? titles.completions(player, arguments[1]) : List.of();
         }
         if (arguments.length == 2 && arguments[0].equalsIgnoreCase("exchange")) {
             return List.of("1", "10", "100", "max");

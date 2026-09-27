@@ -7,6 +7,7 @@ import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.luckperms.api.LuckPerms;
 import net.luckperms.api.model.group.Group;
 import net.luckperms.api.model.user.User;
+import net.luckperms.api.node.NodeType;
 import org.bukkit.entity.Player;
 
 final class PaperLuckPermsTitles {
@@ -24,12 +25,13 @@ final class PaperLuckPermsTitles {
     Component playerIdentity(Player player) {
         String raw = rawPlayerTitle(player);
         String formatting = raw == null ? "" : raw.replace('§', '&').trim();
+        String suffix = suffixLegacy(player).strip();
         if (formatting.isBlank() || plain(formatting).isBlank()) {
             return LEGACY.deserialize((formatting.isBlank() ? "&7" : formatting)
-                + player.getName());
+                + player.getName() + suffixPart(suffix));
         }
         String prefix = normalized(raw, "-");
-        return LEGACY.deserialize(prefix + " " + player.getName());
+        return LEGACY.deserialize(prefix + " " + player.getName() + suffixPart(suffix));
     }
 
     String playerIdentityLegacy(Player player) {
@@ -41,11 +43,15 @@ final class PaperLuckPermsTitles {
             ? null
             : luckPerms.getGroupManager().getGroup(groupName);
         String prefix = group == null ? null : group.getCachedData().getMetaData().getPrefix();
+        String suffix = group == null ? null : group.getCachedData().getMetaData().getSuffix();
         String formatting = prefix == null ? "" : prefix.replace('§', '&').trim();
+        String normalizedSuffix = suffix == null ? "" : suffix.replace('§', '&').trim();
         if (formatting.isBlank() || plain(formatting).isBlank()) {
-            return LEGACY.deserialize((formatting.isBlank() ? "&7" : formatting) + playerName);
+            return LEGACY.deserialize((formatting.isBlank() ? "&7" : formatting)
+                + playerName + suffixPart(normalizedSuffix));
         }
-        return LEGACY.deserialize(normalized(prefix, "-") + " " + playerName);
+        return LEGACY.deserialize(normalized(prefix, "-") + " " + playerName
+            + suffixPart(normalizedSuffix));
     }
 
     String rankIdentityLegacy(String groupName, String playerName) {
@@ -83,8 +89,12 @@ final class PaperLuckPermsTitles {
         if (user == null) {
             return "&7[-]";
         }
+        boolean managed = user.data().toCollection().stream()
+            .filter(NodeType.PREFIX::matches)
+            .map(NodeType.PREFIX::cast)
+            .anyMatch(node -> node.getPriority() == PaperTitleService.MANAGED_PREFIX_PRIORITY);
         String custom = user.getCachedData().getMetaData().getMetaValue("cct-title");
-        String prefix = custom == null || custom.isBlank()
+        String prefix = managed || custom == null || custom.isBlank()
             ? user.getCachedData().getMetaData().getPrefix()
             : custom;
         if (prefix == null || prefix.isBlank()) {
@@ -127,5 +137,9 @@ final class PaperLuckPermsTitles {
 
     private static String legacyOrEmpty(String value) {
         return value == null ? "" : value.replace('§', '&');
+    }
+
+    private static String suffixPart(String suffix) {
+        return suffix == null || plain(suffix).isBlank() ? "" : " " + suffix.strip();
     }
 }

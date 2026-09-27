@@ -60,6 +60,8 @@ final class PaperMembershipMenu implements Listener {
     private final PaperLuckPermsTitles titles;
     private final PaperMessages messages;
     private final PaperMenus menus;
+    private final PaperTitleService titleService;
+    private final PaperNicknameService nicknameService;
     private final List<MembershipTier> configuredTiers;
     private final Set<UUID> inFlight = ConcurrentHashMap.newKeySet();
     private final Map<UUID, CompletableFuture<PersonalData>> personalLoads =
@@ -79,7 +81,9 @@ final class PaperMembershipMenu implements Listener {
         PaperExchangeMenu exchangeMenu,
         PaperLuckPermsTitles titles,
         PaperMessages messages,
-        PaperMenus menus
+        PaperMenus menus,
+        PaperTitleService titleService,
+        PaperNicknameService nicknameService
     ) {
         this.plugin = plugin;
         this.providers = providers;
@@ -90,6 +94,8 @@ final class PaperMembershipMenu implements Listener {
         this.titles = titles;
         this.messages = messages;
         this.menus = menus;
+        this.titleService = titleService;
+        this.nicknameService = nicknameService;
         this.configuredTiers = config.membership().tiers().stream()
             .filter(MembershipTierConfig::enabled)
             .sorted(java.util.Comparator.comparingInt(MembershipTierConfig::priority))
@@ -147,6 +153,8 @@ final class PaperMembershipMenu implements Listener {
             switch (personal.layout.actionAt(slot)) {
                 case "OPEN_MEMBERSHIP" -> openMemberships(player);
                 case "OPEN_EXCHANGE" -> exchangeMenu.open(player);
+                case "OPEN_PREFIX" -> titleService.command(player, new String[0]);
+                case "OPEN_NICKNAME" -> nicknameService.open(player);
                 case "REDEEM_HINT" -> player.sendMessage(messages.component("menus.personal.redeem-hint"));
                 case "CLOSE" -> player.closeInventory();
                 default -> { }
@@ -286,6 +294,12 @@ final class PaperMembershipMenu implements Listener {
         putConfigured(inventory, holder.layout.item("redeem"),
             messages.component("menus.personal.redeem-name"),
             messages.components("menus.personal.redeem-lore"), Material.NAME_TAG);
+        putConfigured(inventory, holder.layout.item("prefix"),
+            messages.component("menus.personal.prefix-name"),
+            messages.components("menus.personal.prefix-lore"), Material.ANVIL);
+        putConfigured(inventory, holder.layout.item("nickname"),
+            messages.component("menus.personal.nickname-name"),
+            messages.components("menus.personal.nickname-lore"), Material.ENDER_EYE);
         putConfigured(inventory, holder.layout.item("close"),
             messages.component("menus.personal.close-name"), List.of(), Material.BARRIER);
     }

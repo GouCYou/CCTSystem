@@ -59,6 +59,7 @@ final class PaperNicknameService implements Listener {
     private final String serverId;
     private final PaperDisguiseProvider disguiseProvider;
     private final PaperTabIntegration tabIntegration;
+    private PaperTitleService titleService;
     private final Map<UUID, NickProfile> active = new ConcurrentHashMap<>();
     private final Map<UUID, NickProfile> pendingLogin = new ConcurrentHashMap<>();
     private final Map<UUID, String> realNames = new ConcurrentHashMap<>();
@@ -182,6 +183,10 @@ final class PaperNicknameService implements Listener {
 
     boolean anonymous(Player player) {
         return active.containsKey(player.getUniqueId());
+    }
+
+    void setTitleService(PaperTitleService titleService) {
+        this.titleService = titleService;
     }
 
     String publicCompletion(String value) {
@@ -666,6 +671,7 @@ final class PaperNicknameService implements Listener {
         disguiseProvider.remove(player);
         player.displayName(Component.text(player.getName()));
         player.playerListName(null);
+        if (titleService != null) titleService.refreshPlayer(player);
     }
 
     private void synchronizeTab(Player player, NickProfile profile, int attempt) {
@@ -676,6 +682,7 @@ final class PaperNicknameService implements Listener {
             titles.prefixLegacy(profile.displayRank()),
             titles.suffixLegacy(profile.displayRank())
         );
+        if (applied) tabIntegration.forceSort(player, PaperTitleService.weight(profile.displayRank()));
         if (!applied && attempt < 10) {
             plugin.getServer().getScheduler().runTaskLater(
                 plugin, () -> synchronizeTab(player, profile, attempt + 1), 10L

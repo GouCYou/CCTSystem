@@ -1,6 +1,9 @@
 package cn.cctstudio.cctsystem.platform.paper;
 
 import java.io.File;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -43,6 +46,15 @@ final class PaperMenus {
     private MenuDefinition load(String id) {
         File file = new File(plugin.getDataFolder(), "menus/" + id + ".yml");
         YamlConfiguration yaml = YamlConfiguration.loadConfiguration(file);
+        try (InputStream input = PaperMenus.class.getResourceAsStream("/menus/" + id + ".yml")) {
+            if (input != null) {
+                yaml.setDefaults(YamlConfiguration.loadConfiguration(
+                    new InputStreamReader(input, StandardCharsets.UTF_8)
+                ));
+            }
+        } catch (java.io.IOException ignored) {
+            // Keep the installed menu authoritative; bundled values only fill new keys.
+        }
         int rows = Math.max(1, Math.min(6, yaml.getInt("rows", 3)));
         int size = rows * 9;
         String titleKey = yaml.getString("title-key", "menus." + id + ".title");

@@ -45,6 +45,8 @@ permissions:
     default: false
   cctsystem.vanish:
     default: false
+  cctsystem.vanish.see:
+    default: false
   cctsystem.reward.vip:
     default: false
   cctsystem.reward.vipp:

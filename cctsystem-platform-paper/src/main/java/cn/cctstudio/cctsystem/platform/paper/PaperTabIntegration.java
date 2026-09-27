@@ -146,16 +146,16 @@ final class PaperTabIntegration {
         try {
             Object tabPlayer = getPlayer.invoke(api, player.getUniqueId());
             if (tabPlayer == null || !Boolean.TRUE.equals(isLoaded.invoke(tabPlayer))) return false;
-            String tabPrefix = replaceAffix(
+            String tabPrefix = TabAffixFormatting.replaceAffix(
                 value(tabOriginalPrefix.invoke(tabList, tabPlayer)), rankPrefix, true
             );
-            String tabSuffix = replaceAffix(
+            String tabSuffix = TabAffixFormatting.replaceAffix(
                 value(tabOriginalSuffix.invoke(tabList, tabPlayer)), rankSuffix, false
             );
-            String tagPrefix = replaceAffix(
+            String tagPrefix = TabAffixFormatting.replaceAffix(
                 value(tagOriginalPrefix.invoke(nameTags, tabPlayer)), rankPrefix, true
             );
-            String tagSuffix = replaceAffix(
+            String tagSuffix = TabAffixFormatting.replaceAffix(
                 value(tagOriginalSuffix.invoke(nameTags, tabPlayer)), rankSuffix, false
             );
             setExpectedProfileName.invoke(tabPlayer, nickname);
@@ -189,6 +189,33 @@ final class PaperTabIntegration {
         }
     }
 
+    void forceSort(Player player, int titleWeight) {
+        if (api == null || sorting == null) return;
+        applyForcedSort(player, titleWeight);
+        // apply() temporarily refreshes TAB's team and restores its prior override after
+        // two ticks. Reassert the selected title order after that refresh completes.
+        plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+            if (player.isOnline()) applyForcedSort(player, titleWeight);
+        }, 3L);
+    }
+
+    private void applyForcedSort(Player player, int titleWeight) {
+        try {
+            Object tabPlayer = getPlayer.invoke(api, player.getUniqueId());
+            if (tabPlayer == null || !Boolean.TRUE.equals(isLoaded.invoke(tabPlayer))) return;
+            String original = value(sortingOriginalTeamName.invoke(sorting, tabPlayer));
+            if (original.isEmpty()) return;
+            // TAB's GROUPS sorting type uses '0' for owner through '8' for default.
+            // Preserve the remaining original team name so players with a selected
+            // title sort alongside players who naturally have that group.
+            int order = 8 - Math.max(0, Math.min(8, titleWeight));
+            String teamName = (char) ('0' + order) + original.substring(1);
+            sortingForceTeamName.invoke(sorting, tabPlayer, teamName);
+        } catch (ReflectiveOperationException | RuntimeException exception) {
+            logOnce("Unable to apply CCT title sorting to TAB", exception);
+        }
+    }
+
     /**
      * Changing TAB's expected profile name removes and recreates the client-side entry. TAB 6
      * otherwise keeps the old scoreboard team until its next refresh, which temporarily places
@@ -214,42 +241,6 @@ final class PaperTabIntegration {
                 logOnce("Unable to release TAB sorting refresh", exception);
             }
         }, 2L);
-    }
-
-    private static String replaceAffix(String template, String replacement, boolean prefix) {
-        String value = template == null ? "" : template;
-        String affix = replacement == null ? "" : replacement.strip();
-        String replaced = value
-            .replace("%vault_prefix%", affix)
-            .replace("%vault-prefix%", affix)
-            .replace("%luckperms_prefix%", affix)
-            .replace("%cctsystem_prefix%", affix)
-            .replace("%vault_suffix%", affix)
-            .replace("%vault-suffix%", affix)
-            .replace("%luckperms_suffix%", affix);
-        replaced = replaced.replace("%cctsystem_suffix%", affix);
-        if (replaced.equals(value)
-            && !value.contains("%vault_prefix%")
-            && !value.contains("%vault-prefix%")
-            && !value.contains("%luckperms_prefix%")
-            && !value.contains("%cctsystem_prefix%")
-            && !value.contains("%vault_suffix%")
-            && !value.contains("%vault-suffix%")
-            && !value.contains("%luckperms_suffix%")
-            && !value.contains("%cctsystem_suffix%")) {
-            replaced = prefix ? affix : affix + value;
-        }
-        String result = replaced.replaceAll("](?=(?:&[0-9A-FK-ORX])*\\[)", "] ")
-            .replaceAll("[ \\t]{2,}", " ")
-            .stripTrailing()
-            // A default group often contributes only a color code. Do not leave one space
-            // before that invisible code and then append a second separator for the name.
-            .replaceFirst("(?i)[ \\t]+((?:&[0-9A-FK-ORX])*)$", "$1");
-        return prefix && hasVisibleText(result) ? result + " " : result;
-    }
-
-    private static boolean hasVisibleText(String value) {
-        return !value.replaceAll("(?i)&[0-9A-FK-ORX]", "").isBlank();
     }
 
     private static String value(Object value) {

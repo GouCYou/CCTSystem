@@ -8,41 +8,72 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import net.luckperms.api.LuckPerms;
 import net.luckperms.api.event.EventSubscription;
-import net.luckperms.api.event.user.UserDataRecalculateEvent;
+import net.luckperms.api.event.node.NodeMutateEvent;
+import net.luckperms.api.model.user.User;
+import net.luckperms.api.node.Node;
+import net.luckperms.api.node.NodeType;
 import org.bukkit.plugin.java.JavaPlugin;
 
 final class PaperMembershipAccessSynchronizer implements AutoCloseable {
     private final JavaPlugin plugin;
     private final ProviderRegistry providers;
     private final CctLogger logger;
+    private final Set<String> accessRelevantGroups;
     private final Set<UUID> queued = ConcurrentHashMap.newKeySet();
-    private final EventSubscription<UserDataRecalculateEvent> subscription;
+    private final EventSubscription<NodeMutateEvent> subscription;
 
     PaperMembershipAccessSynchronizer(
         JavaPlugin plugin,
         ProviderRegistry providers,
         CctLogger logger,
-        LuckPerms luckPerms
+        LuckPerms luckPerms,
+        Set<String> accessRelevantGroups
     ) {
         this.plugin = plugin;
         this.providers = providers;
         this.logger = logger;
+        this.accessRelevantGroups = Set.copyOf(accessRelevantGroups);
         this.subscription = luckPerms.getEventBus().subscribe(
             plugin,
-            UserDataRecalculateEvent.class,
-            event -> queue(event.getUser().getUniqueId())
+            NodeMutateEvent.class,
+            this::onNodeMutation
         );
+    }
+
+    private void onNodeMutation(NodeMutateEvent event) {
+        if (!(event.getTarget() instanceof User user)) return;
+        if (!affectsAccess(event.getDataBefore(), event.getDataAfter(), accessRelevantGroups)) {
+            return;
+        }
+        queue(user.getUniqueId());
+    }
+
+    static boolean affectsAccess(Set<Node> before, Set<Node> after, Set<String> relevantGroups) {
+        return MembershipAccessGroupChanges.affectsAccess(
+            inheritanceGroups(before),
+            inheritanceGroups(after),
+            relevantGroups
+        );
+    }
+
+    private static Set<String> inheritanceGroups(Set<Node> nodes) {
+        return nodes.stream()
+            .filter(NodeType.INHERITANCE::matches)
+            .map(NodeType.INHERITANCE::cast)
+            .map(node -> node.getGroupName())
+            .collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 
     private void queue(UUID playerUuid) {
         if (!queued.add(playerUuid)) return;
         plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
-            queued.remove(playerUuid);
-            providers.find(MembershipServiceProvider.KEY).ifPresent(memberships ->
-                memberships.reconcile(playerUuid).exceptionally(throwable -> {
+            providers.find(MembershipServiceProvider.KEY).ifPresentOrElse(memberships ->
+                memberships.reconcile(playerUuid).whenComplete((ignored, throwable) -> {
+                    queued.remove(playerUuid);
+                    if (throwable == null) return;
                     logger.warn("Unable to reconcile membership after LuckPerms access changed", throwable);
-                    return null;
-                })
+                }),
+                () -> queued.remove(playerUuid)
             );
         }, 2L);
     }

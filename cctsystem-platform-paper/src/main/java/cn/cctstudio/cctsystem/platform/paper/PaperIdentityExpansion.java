@@ -9,9 +9,11 @@ import org.jetbrains.annotations.NotNull;
 /** Stable public identity placeholders that never expose a nicked player's real rank or name. */
 final class PaperIdentityExpansion extends PlaceholderExpansion {
     private final PaperNicknameService nicknames;
+    private final String serverId;
 
-    PaperIdentityExpansion(PaperNicknameService nicknames) {
+    PaperIdentityExpansion(PaperNicknameService nicknames, String serverId) {
         this.nicknames = nicknames;
+        this.serverId = serverId;
     }
 
     @Override
@@ -41,7 +43,7 @@ final class PaperIdentityExpansion extends PlaceholderExpansion {
             case "name" -> nicknames.displayName(player);
             case "identity" -> nicknames.identityLegacy(player);
             case "identity_no_world" -> withoutWorldPrefix(
-                nicknames.identityLegacy(player), player.getWorld().getName()
+                nicknames.identityLegacy(player), player.getWorld().getName(), serverId
             );
             case "prefix" -> nicknames.prefixLegacy(player);
             case "suffix" -> nicknames.suffixLegacy(player);
@@ -51,13 +53,23 @@ final class PaperIdentityExpansion extends PlaceholderExpansion {
         };
     }
 
-    private static String withoutWorldPrefix(String identity, String worldName) {
-        if (identity == null || identity.isBlank() || worldName == null || worldName.isBlank()) {
+    static String withoutWorldPrefix(String identity, String worldName, String serverId) {
+        if (identity == null || identity.isBlank()) {
             return identity;
         }
         String colors = "(?:&[0-9A-FK-ORX])*";
-        String worldTag = "(?i)" + colors + "\\[" + colors
-            + Pattern.quote(worldName) + colors + "\\]\\s*";
-        return identity.replaceFirst(worldTag, "");
+        String result = identity;
+        if (worldName != null && !worldName.isBlank()) {
+            String worldTag = "(?i)" + colors + "\\[" + colors
+                + Pattern.quote(worldName) + colors + "\\]\\s*";
+            result = result.replaceFirst(worldTag, "");
+        }
+        if ("duel".equalsIgnoreCase(serverId) || "duels".equalsIgnoreCase(serverId)) {
+            result = result.replaceFirst(
+                "(?i)^\\s*" + colors + "\\[" + colors + "lobby" + colors + "\\]\\s*",
+                ""
+            );
+        }
+        return result;
     }
 }

@@ -58,6 +58,7 @@ public final class BridgeClient implements LifecycleComponent, BridgeRpcClient {
     private final AtomicInteger reconnectAttempts = new AtomicInteger();
     private final AtomicLong outboundSequence = new AtomicLong();
     private final AtomicLong inboundSequence = new AtomicLong();
+    private final AtomicLong lastServerActivityNanos = new AtomicLong();
     private volatile HttpClient httpClient;
     private volatile ScheduledFuture<?> pingTask;
 
@@ -97,7 +98,7 @@ public final class BridgeClient implements LifecycleComponent, BridgeRpcClient {
             .executor(executors.blocking())
             .build();
         connect();
-        pingTask = executors.scheduler().scheduleAtFixedRate(this::ping, 20, 20, TimeUnit.SECONDS);
+        pingTask = executors.scheduler().scheduleAtFixedRate(this::heartbeat, 20, 20, TimeUnit.SECONDS);
         return CompletableFuture.completedFuture(null);
     }
 
@@ -236,6 +237,7 @@ public final class BridgeClient implements LifecycleComponent, BridgeRpcClient {
         reconnectAttempts.set(0);
         inboundSequence.set(0);
         outboundSequence.set(0);
+        lastServerActivityNanos.set(System.nanoTime());
         sendHello(webSocket);
         logger.info("Worker bridge connected for node " + nodeConfig.nodeId());
     }
@@ -244,6 +246,10 @@ public final class BridgeClient implements LifecycleComponent, BridgeRpcClient {
         try {
             JsonNode tree = mapper.readTree(message);
             validateEnvelope(tree);
+            lastServerActivityNanos.set(System.nanoTime());
+            if ("heartbeat_ack".equals(tree.path("kind").asText())) {
+                return;
+            }
             if ("response".equals(tree.path("kind").asText())) {
                 handleCallResponse(mapper.treeToValue(tree, RpcResponse.class));
                 return;
@@ -384,10 +390,33 @@ public final class BridgeClient implements LifecycleComponent, BridgeRpcClient {
         executors.scheduler().schedule(this::connect, delay, TimeUnit.MILLISECONDS);
     }
 
-    private void ping() {
+    private void heartbeat() {
         WebSocket existing = socket.get();
-        if (existing != null && !stopped.get()) {
-            existing.sendPing(ByteBuffer.wrap(new byte[]{0x43, 0x43, 0x54}));
+        if (existing == null || stopped.get()) {
+            return;
+        }
+        long lastActivity = lastServerActivityNanos.get();
+        if (lastActivity != 0L
+            && System.nanoTime() - lastActivity > TimeUnit.SECONDS.toNanos(65)) {
+            existing.abort();
+            disconnected(existing, "application heartbeat timed out");
+            return;
+        }
+        ObjectNode frame = mapper.createObjectNode();
+        frame.put("version", Protocol.VERSION);
+        frame.put("kind", "heartbeat");
+        frame.put("sequence", outboundSequence.incrementAndGet());
+        try {
+            existing.sendText(mapper.writeValueAsString(frame), true)
+                .whenComplete((ignored, failure) -> {
+                    if (failure != null) {
+                        existing.abort();
+                        disconnected(existing, "heartbeat failed: " + rootMessage(failure));
+                    }
+                });
+        } catch (JsonProcessingException | RuntimeException failure) {
+            existing.abort();
+            disconnected(existing, "heartbeat failed: " + rootMessage(failure));
         }
     }
 
@@ -430,6 +459,7 @@ public final class BridgeClient implements LifecycleComponent, BridgeRpcClient {
 
         @Override
         public java.util.concurrent.CompletionStage<?> onPong(WebSocket webSocket, ByteBuffer message) {
+            lastServerActivityNanos.set(System.nanoTime());
             webSocket.request(1);
             return CompletableFuture.completedFuture(null);
         }
