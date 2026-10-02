@@ -62,7 +62,7 @@ import org.slf4j.Logger;
 @Plugin(
     id = "cctsystem",
     name = "CCTSystem",
-    version = "0.1.0-SNAPSHOT",
+    version = "1.0.0",
     description = "CCTStudio unified network core",
     authors = {"GouC"},
     dependencies = {
@@ -316,7 +316,7 @@ public final class VelocityBootstrap {
                 config,
                 PlatformType.VELOCITY,
                 created.bootId(),
-                "0.1.0-SNAPSHOT",
+                "1.0.0",
                 () -> {
                     Set<Capability> result = new HashSet<>(baseCapabilities);
                     result.addAll(created.activeCapabilities());

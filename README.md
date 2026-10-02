@@ -13,7 +13,7 @@ CCTStudio 群组服统一核心。相同的 JAR 可安装在 Velocity 与 Paper�
 产物位于：
 
 ```text
-cctsystem-distribution/build/libs/CCTSystem-0.1.0-SNAPSHOT.jar
+cctsystem-distribution/build/libs/CCTSystem-1.0.0.jar
 ```
 
 部署时两个平台的数据目录大小写不同：Paper 使用 `plugins/CCTSystem/config.yml`，Velocity 使用插件 ID 对应的 `plugins/cctsystem/config.yml`。两端仍安装同一个 `CCTSystem.jar`。

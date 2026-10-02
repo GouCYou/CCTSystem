@@ -1,5 +1,5 @@
 name: CCTSystem
-version: '0.1.0-SNAPSHOT'
+version: '1.0.0'
 main: cn.cctstudio.cctsystem.platform.paper.PaperBootstrap
 api-version: '1.21'
 load: POSTWORLD

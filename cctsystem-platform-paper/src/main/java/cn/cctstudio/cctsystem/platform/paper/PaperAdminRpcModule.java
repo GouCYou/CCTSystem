@@ -11,6 +11,11 @@ import cn.cctstudio.cctsystem.core.module.CctModule;
 import cn.cctstudio.cctsystem.core.module.ModuleContext;
 import cn.cctstudio.cctsystem.core.module.ModuleDescriptor;
 import cn.cctstudio.cctsystem.identity.UuidBinary;
+import cn.cctstudio.cctsystem.points.PointsServiceProvider;
+import cn.cctstudio.cctsystem.promotion.CreatePromotionRequest;
+import cn.cctstudio.cctsystem.promotion.Promotion;
+import cn.cctstudio.cctsystem.promotion.PromotionService;
+import cn.cctstudio.cctsystem.promotion.PromotionServiceProvider;
 import cn.cctstudio.cctsystem.membership.AdminMembershipAction;
 import cn.cctstudio.cctsystem.membership.AdminMembershipRequest;
 import cn.cctstudio.cctsystem.membership.MembershipException;
@@ -79,6 +84,7 @@ final class PaperAdminRpcModule implements CctModule {
 
     private final JavaPlugin plugin;
     private ModuleContext context;
+    private BulkPointsAdmin bulkPoints;
 
     PaperAdminRpcModule(JavaPlugin plugin) {
         this.plugin = plugin;
@@ -103,12 +109,77 @@ final class PaperAdminRpcModule implements CctModule {
         router.registerCall("admin.server.logs", this::serverLogs);
         router.registerCall("admin.server.command", this::serverCommand);
         router.registerCall("admin.audit.record", this::recordAudit);
+        router.registerCall("admin.promotions.list", this::listPromotions);
+        router.registerCall("admin.promotions.mutate", this::mutatePromotion);
+        if (context.config().roles().contains(NodeRole.POINTS_AUTHORITY)
+            && context.providers().find(PointsServiceProvider.KEY).isPresent()) {
+            bulkPoints = new BulkPointsAdmin(context);
+            bulkPoints.start();
+        }
+        router.registerCall("admin.points.grant", call -> {
+            JsonNode payload = objectPayload(call);
+            requireConsoleGroup(payload);
+            if (bulkPoints == null) throw unavailable("POINTS_UNAVAILABLE", "Points authority is unavailable");
+            UUID batchId = uuid(payload, "batchId");
+            int points = integer(payload, "points", 1, 10_000_000);
+            String scope = text(payload, "scope", 16);
+            if (!Set.of("ALL", "BOUND").contains(scope)) throw invalid("Invalid points scope");
+            return bulkPoints.create(batchId, points, scope, text(payload, "actorName", 64), text(payload, "reason", 255));
+        });
+        router.registerCall("admin.points.batches", call -> {
+            requireStaff(objectPayload(call));
+            if (bulkPoints == null) throw unavailable("POINTS_UNAVAILABLE", "Points authority is unavailable");
+            return bulkPoints.list();
+        });
         return CompletableFuture.completedFuture(null);
     }
 
     @Override
     public CompletableFuture<Void> stop() {
+        if (bulkPoints != null) bulkPoints.stop();
         return CompletableFuture.completedFuture(null);
+    }
+
+    private PromotionService promotions() {
+        return context.providers().find(PromotionServiceProvider.KEY)
+            .orElseThrow(() -> unavailable("PROMOTION_UNAVAILABLE", "Promotion service is unavailable"));
+    }
+
+    private CompletionStage<JsonNode> listPromotions(BridgeRpcCall call) {
+        requireStaff(objectPayload(call));
+        return promotions().listCurrent(Instant.now()).thenApply(items -> {
+            ArrayNode array = JSON.createArrayNode();
+            items.forEach(item -> array.add(promotionJson(item)));
+            return JSON.createObjectNode().set("items", array);
+        });
+    }
+
+    private CompletionStage<JsonNode> mutatePromotion(BridgeRpcCall call) {
+        JsonNode payload = objectPayload(call);
+        requireStaff(payload);
+        String actor = "web:" + text(payload, "actorName", 64);
+        String action = text(payload, "action", 16);
+        if (action.equals("STOP")) return promotions().stop(uuid(payload, "promotionId"), actor,
+            "管理后台结束折扣", Instant.now()).thenApply(stopped -> JSON.createObjectNode().put("stopped", stopped));
+        if (!action.equals("CREATE")) throw invalid("Invalid promotion action");
+        String tier = optionalText(payload, "targetTierKey", 64, null);
+        if (tier != null && context.config().membership().tiers().stream().noneMatch(value -> value.key().equals(tier))) {
+            throw invalid("Invalid promotion tier");
+        }
+        Instant starts = optionalInstant(payload, "startsAt");
+        Instant ends = optionalInstant(payload, "endsAt");
+        if (starts == null || ends == null || !ends.isAfter(starts) || !ends.isAfter(Instant.now())) throw invalid("Invalid promotion dates");
+        return promotions().create(new CreatePromotionRequest(text(payload, "name", 64), tier,
+            integer(payload, "percentOffBps", 1, 10_000), starts, ends, 0, actor,
+            "管理后台设置会员折扣")).thenApply(PaperAdminRpcModule::promotionJson);
+    }
+
+    private static ObjectNode promotionJson(Promotion item) {
+        ObjectNode result = JSON.createObjectNode().put("promotionId", item.promotionId().toString())
+            .put("name", item.name()).put("percentOffBps", item.percentOffBps())
+            .put("startsAt", item.startsAt().toString()).put("endsAt", item.endsAt().toString()).put("status", item.status());
+        putNullable(result, "targetTierKey", item.targetTierKey());
+        return result;
     }
 
     private CompletionStage<JsonNode> generateRedeemCodes(BridgeRpcCall call) {

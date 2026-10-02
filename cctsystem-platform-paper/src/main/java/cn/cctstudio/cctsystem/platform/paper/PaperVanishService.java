@@ -24,6 +24,8 @@ import java.util.concurrent.Executor;
 import net.kyori.adventure.bossbar.BossBar;
 import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
+import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.Statistic;
 import org.bukkit.block.Container;
 import org.bukkit.entity.Player;
@@ -43,6 +45,8 @@ import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerAttemptPickupItemEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerChangedWorldEvent;
+import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.inventory.Inventory;
@@ -69,7 +73,7 @@ final class PaperVanishService implements Listener {
     private final Map<UUID, CompletableFuture<?>> writes = new ConcurrentHashMap<>();
     private final Map<UUID, BossBar> bossBars = new ConcurrentHashMap<>();
     private final Map<UUID, Integer> playtimeSnapshots = new ConcurrentHashMap<>();
-    private final Set<UUID> cctNightVision = ConcurrentHashMap.newKeySet();
+    private final NamespacedKey nightVisionKey;
     private final PaperCmiAfkAdapter cmiAfk;
 
     PaperVanishService(
@@ -90,6 +94,7 @@ final class PaperVanishService implements Listener {
         this.messages = messages;
         this.serverId = serverId;
         this.settings = settings;
+        this.nightVisionKey = new NamespacedKey(plugin, "vanish_night_vision");
         plugin.getServer().getMessenger().registerOutgoingPluginChannel(
             plugin, PaperNetworkChat.CHANNEL
         );
@@ -115,7 +120,7 @@ final class PaperVanishService implements Listener {
         writes.put(uuid, write);
         write.whenComplete((ignored, failure) -> main(() -> {
             writes.remove(uuid, write);
-            if (!player.isOnline()) return;
+            if (!isCurrentSession(player)) return;
             if (failure != null) {
                 logger.warn("Unable to update vanish state for " + uuid, unwrap(failure));
                 player.sendMessage(messages.component("vanish.failed"));
@@ -156,6 +161,8 @@ final class PaperVanishService implements Listener {
         if (enabled) {
             if (!settings.informOnJoin()) event.joinMessage(null);
             apply(player, true, false);
+        } else {
+            clearNightVision(player);
         }
         for (Player target : plugin.getServer().getOnlinePlayers()) {
             if (vanished.contains(target.getUniqueId())) hideFrom(player, target);
@@ -179,7 +186,20 @@ final class PaperVanishService implements Listener {
             });
         }
         BossBar bar = bossBars.remove(event.getPlayer().getUniqueId());
-        if (bar != null) event.getPlayer().hideBossBar(bar);
+        if (bar != null) player.hideBossBar(bar);
+        clearNightVision(player);
+        vanished.remove(player.getUniqueId());
+        playtimeSnapshots.remove(player.getUniqueId());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onWorldChange(PlayerChangedWorldEvent event) {
+        refreshPresentationLater(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onRespawn(PlayerRespawnEvent event) {
+        refreshPresentationLater(event.getPlayer());
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -331,28 +351,9 @@ final class PaperVanishService implements Listener {
             vanished.add(player.getUniqueId());
             if (!settings.afkCommands()) cmiAfk.leaveAfkSilently(player);
             for (Player viewer : plugin.getServer().getOnlinePlayers()) hideFrom(viewer, player);
-            if (settings.bossbar()) {
-                BossBar bar = BossBar.bossBar(
-                    messages.component("vanish.bossbar").decoration(TextDecoration.ITALIC, false),
-                    1.0f,
-                    BossBar.Color.WHITE,
-                    BossBar.Overlay.PROGRESS
-                );
-                BossBar previous = bossBars.put(player.getUniqueId(), bar);
-                if (previous != null) player.hideBossBar(previous);
-                player.showBossBar(bar);
-            }
-            if (settings.nightVision() && !player.hasPotionEffect(PotionEffectType.NIGHT_VISION)) {
-                player.addPotionEffect(new PotionEffect(
-                    PotionEffectType.NIGHT_VISION,
-                    PotionEffect.INFINITE_DURATION,
-                    0,
-                    false,
-                    false,
-                    false
-                ));
-                cctNightVision.add(player.getUniqueId());
-            }
+            showBossBar(player, false);
+            ensureNightVision(player);
+            refreshPresentationLater(player);
             if (settings.sleepIgnore()) player.setSleepingIgnored(true);
             if (settings.stopPlaytime()) {
                 playtimeSnapshots.put(
@@ -366,9 +367,7 @@ final class PaperVanishService implements Listener {
             }
             BossBar bar = bossBars.remove(player.getUniqueId());
             if (bar != null) player.hideBossBar(bar);
-            if (cctNightVision.remove(player.getUniqueId())) {
-                player.removePotionEffect(PotionEffectType.NIGHT_VISION);
-            }
+            clearNightVision(player);
             player.setSleepingIgnored(false);
             playtimeSnapshots.remove(player.getUniqueId());
         }
@@ -385,6 +384,61 @@ final class PaperVanishService implements Listener {
         if (notify) player.sendMessage(messages.component(
             enabled ? "vanish.enabled" : "vanish.disabled"
         ));
+    }
+
+    private boolean isCurrentSession(Player player) {
+        return player.isOnline() && plugin.getServer().getPlayer(player.getUniqueId()) == player;
+    }
+
+    private void refreshPresentationLater(Player player) {
+        // Join/respawn/world-change packets can reset the client's bars after the event.
+        // Re-send after initialization, guarding against logout or a newer toggle.
+        for (long delay : new long[] { 1L, 10L }) {
+            plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+                if (!isCurrentSession(player) || !vanished.contains(player.getUniqueId())) return;
+                showBossBar(player, true);
+                ensureNightVision(player);
+            }, delay);
+        }
+    }
+
+    private void showBossBar(Player player, boolean resend) {
+        if (!settings.bossbar()) return;
+        BossBar bar = bossBars.computeIfAbsent(player.getUniqueId(), ignored -> BossBar.bossBar(
+            messages.component("vanish.bossbar").decoration(TextDecoration.ITALIC, false),
+            1.0f, BossBar.Color.WHITE, BossBar.Overlay.PROGRESS
+        ));
+        if (resend) player.hideBossBar(bar);
+        player.showBossBar(bar);
+    }
+
+    private void ensureNightVision(Player player) {
+        if (!settings.nightVision()) return;
+        PotionEffect effect = player.getPotionEffect(PotionEffectType.NIGHT_VISION);
+        if (effect == null) {
+            if (player.addPotionEffect(new PotionEffect(
+                PotionEffectType.NIGHT_VISION, PotionEffect.INFINITE_DURATION,
+                0, false, false, false
+            ))) player.getPersistentDataContainer().set(nightVisionKey, PersistentDataType.BYTE, (byte) 1);
+        } else if (isVanishNightVision(effect)) {
+            // Adopt effects left by the old implementation during a server transfer.
+            player.getPersistentDataContainer().set(nightVisionKey, PersistentDataType.BYTE, (byte) 1);
+        }
+    }
+
+    private void clearNightVision(Player player) {
+        PotionEffect effect = player.getPotionEffect(PotionEffectType.NIGHT_VISION);
+        // Ownership survives a transfer/relogin. Also clean the exact legacy effect,
+        // while preserving normal potions/beacons and effects replaced by other plugins.
+        if ((settings.nightVision() || player.getPersistentDataContainer().has(nightVisionKey, PersistentDataType.BYTE))
+            && isVanishNightVision(effect)) player.removePotionEffect(PotionEffectType.NIGHT_VISION);
+        player.getPersistentDataContainer().remove(nightVisionKey);
+    }
+
+    private static boolean isVanishNightVision(PotionEffect effect) {
+        return effect != null && effect.getDuration() == PotionEffect.INFINITE_DURATION
+            && effect.getAmplifier() == 0 && !effect.isAmbient()
+            && !effect.hasParticles() && !effect.hasIcon();
     }
 
     private void hideFrom(Player viewer, Player target) {
