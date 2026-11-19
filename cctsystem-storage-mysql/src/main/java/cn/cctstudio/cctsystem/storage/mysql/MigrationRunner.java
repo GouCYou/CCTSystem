@@ -33,7 +33,9 @@ final class MigrationRunner {
         new Migration(12, "membership_access_pause", "/db/migration/V12__membership_access_pause.sql"),
         new Migration(13, "web_admin", "/db/migration/V13__web_admin.sql"),
         new Migration(14, "player_titles", "/db/migration/V14__player_titles.sql"),
-        new Migration(15, "bulk_points_admin", "/db/migration/V15__bulk_points_admin.sql")
+        new Migration(15, "bulk_points_admin", "/db/migration/V15__bulk_points_admin.sql"),
+        new Migration(16, "chat_filter_incidents", "/db/migration/V16__chat_filter_incidents.sql"),
+        new Migration(17, "discount_codes", "/db/migration/V17__discount_codes.sql")
     );
 
     private final DataSource dataSource;

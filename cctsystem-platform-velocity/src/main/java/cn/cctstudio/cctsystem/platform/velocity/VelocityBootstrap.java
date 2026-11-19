@@ -331,7 +331,7 @@ public final class VelocityBootstrap {
             SkinsRestorerInstaller.install(created);
         }
         created.registerModule(new SkinAvatarRpcModule());
-        created.registerModule(new VelocityAdminRpcModule(proxy, dataDirectory));
+        created.registerModule(new VelocityAdminRpcModule(proxy, dataDirectory, () -> chatFilter));
     }
 
     private CompletableFuture<com.fasterxml.jackson.databind.JsonNode> networkStatus() {
@@ -366,8 +366,17 @@ public final class VelocityBootstrap {
         LuckPerms luckPerms = LuckPermsProvider.get();
         return luckPerms.getUserManager().loadUser(playerUuid).thenApply(user -> {
             ObjectNode result = JSON.createObjectNode();
-            result.put("online", proxy.getPlayer(playerUuid).isPresent()
-                && !vanished.contains(playerUuid));
+            // This authenticated profile is private; vanish only hides public presence.
+            var connectedPlayer = proxy.getPlayer(playerUuid);
+            result.put("online", connectedPlayer.isPresent());
+            connectedPlayer.flatMap(player -> player.getCurrentServer())
+                .ifPresentOrElse(connection -> result.put("serverId", connection.getServerInfo().getName()),
+                    () -> result.putNull("serverId"));
+            connectedPlayer.ifPresentOrElse(player -> {
+                var address = player.getRemoteAddress().getAddress();
+                if (address == null) result.putNull("connectionIp");
+                else result.put("connectionIp", address.getHostAddress());
+            }, () -> result.putNull("connectionIp"));
             String primaryGroup = profilePrimaryGroup(luckPerms, user, membershipGroups());
             result.put("primaryGroup", primaryGroup);
             String customTitle = user.getCachedData().getMetaData().getMetaValue("cct-title");

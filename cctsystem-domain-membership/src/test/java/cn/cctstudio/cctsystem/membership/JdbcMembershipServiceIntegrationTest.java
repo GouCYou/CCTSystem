@@ -80,6 +80,91 @@ final class JdbcMembershipServiceIntegrationTest {
         );
     }
 
+    @Test
+    void appliesCodeWithoutStackingAndRevalidatesBeforeCharging() throws Exception {
+        UUID player=UUID.randomUUID();
+        promotions.code=new Promotion(UUID.randomUUID(),"Code",null,2000,NOW.minusSeconds(60),NOW.plusSeconds(3600),0,"ACTIVE","TESTCODE");
+        assertEquals(80,service.quote(player,"vip",1,UpgradeMode.NONE,"TESTCODE").toCompletableFuture().get().finalPricePoints());
+        promotions.active=new Promotion(UUID.randomUUID(),"Better offer",null,5000,NOW.minusSeconds(60),NOW.plusSeconds(3600),0,"ACTIVE");
+        assertEquals(50,service.quote(player,"vip",1,UpgradeMode.NONE,"TESTCODE").toCompletableFuture().get().finalPricePoints());
+        promotions.code=null;
+        org.junit.jupiter.api.Assertions.assertThrows(java.util.concurrent.ExecutionException.class,()->service.purchase(
+            new MembershipPurchaseRequest(player,"vip",1,UpgradeMode.NONE,"code-revoked-"+player,"TEST","TESTCODE")).toCompletableFuture().get());
+        assertEquals(0,points.debits.get());
+    }
+
+    @Test
+    void purchasesWithCodeAndReplaysWithoutDoubleCharging() throws Exception {
+        UUID player=UUID.randomUUID(); UUID promotion=UUID.randomUUID();
+        promotions.code=new Promotion(promotion,"Code",null,2000,NOW.minusSeconds(60),NOW.plusSeconds(3600),0,"ACTIVE","TESTCODE");
+        try (Connection connection=database.connection(); PreparedStatement insert=connection.prepareStatement(
+            "INSERT INTO cct_promotions(promotion_id,name,scope,percent_off_bps,starts_at,ends_at,priority,status,created_by,reason) VALUES (?, 'Code', 'MEMBERSHIP_CODE_ALL', 2000, ?, ?, 0, 'ACTIVE', 'test', 'test')")) {
+            insert.setBytes(1,UuidBinary.encode(promotion));
+            insert.setObject(2,java.time.LocalDateTime.ofInstant(NOW.minusSeconds(60),ZoneOffset.UTC));
+            insert.setObject(3,java.time.LocalDateTime.ofInstant(NOW.plusSeconds(3600),ZoneOffset.UTC)); insert.executeUpdate();
+        }
+        var request=new MembershipPurchaseRequest(player,"vip",1,UpgradeMode.NONE,"code-purchase-"+player,"TEST","TESTCODE");
+        var first=service.purchase(request).toCompletableFuture().get();
+        assertEquals(MembershipOrderStatus.COMPLETED,first.status()); assertEquals(80,first.finalPricePoints());
+        assertEquals(first.orderId(),service.purchase(request).toCompletableFuture().get().orderId()); assertEquals(1,points.debits.get());
+    }
+
+    @Test
+    void reservesLastCodeSlotAtomicallyAcrossConcurrentPlayers() throws Exception {
+        UUID promotion=UUID.randomUUID();
+        promotions.code=new Promotion(promotion,"Limited",null,2000,NOW.minusSeconds(60),NOW.plusSeconds(3600),0,"ACTIVE","LIMITED");
+        try(Connection c=database.connection(); PreparedStatement insert=c.prepareStatement(
+            "INSERT INTO cct_promotions(promotion_id,name,scope,percent_off_bps,starts_at,ends_at,priority,status,created_by,reason,discount_code,max_uses_per_player,max_players) VALUES (?, 'Limited', 'MEMBERSHIP_CODE_ALL', 2000, ?, ?, 0, 'ACTIVE', 'test', 'test', ?, 1, 1)")) {
+            insert.setBytes(1,UuidBinary.encode(promotion)); insert.setObject(2,java.time.LocalDateTime.ofInstant(NOW.minusSeconds(60),ZoneOffset.UTC));
+            insert.setObject(3,java.time.LocalDateTime.ofInstant(NOW.plusSeconds(3600),ZoneOffset.UTC));insert.setString(4,"LIMIT_"+promotion.toString().substring(0,8));insert.executeUpdate();
+        }
+        var first=service.purchase(new MembershipPurchaseRequest(UUID.randomUUID(),"vip",1,UpgradeMode.NONE,"limited-a-"+promotion,"TEST","LIMITED")).toCompletableFuture();
+        var second=service.purchase(new MembershipPurchaseRequest(UUID.randomUUID(),"vip",1,UpgradeMode.NONE,"limited-b-"+promotion,"TEST","LIMITED")).toCompletableFuture();
+        CompletableFuture.allOf(first,second).get(10,TimeUnit.SECONDS);
+        assertEquals(1,List.of(first.get(),second.get()).stream().filter(o->o.status()==MembershipOrderStatus.COMPLETED).count());
+        assertEquals(1,points.debits.get());
+        assertTrue(List.of(first.get(),second.get()).stream().anyMatch(o->"DISCOUNT_CODE_LIMIT_REACHED".equals(o.errorCode())));
+    }
+
+    @Test
+    void oncePerPlayerRejectsSecondOrderWithoutCharging() throws Exception {
+        UUID promotion=UUID.randomUUID(),player=UUID.randomUUID();
+        promotions.code=new Promotion(promotion,"Once",null,2000,NOW.minusSeconds(60),NOW.plusSeconds(3600),0,"ACTIVE","ONCE");
+        try(Connection c=database.connection(); PreparedStatement insert=c.prepareStatement(
+            "INSERT INTO cct_promotions(promotion_id,name,scope,percent_off_bps,starts_at,ends_at,priority,status,created_by,reason,discount_code,max_uses_per_player) VALUES (?, 'Once', 'MEMBERSHIP_CODE_ALL', 2000, ?, ?, 0, 'ACTIVE', 'test', 'test', ?, 1)")) {
+            insert.setBytes(1,UuidBinary.encode(promotion)); insert.setObject(2,java.time.LocalDateTime.ofInstant(NOW.minusSeconds(60),ZoneOffset.UTC));
+            insert.setObject(3,java.time.LocalDateTime.ofInstant(NOW.plusSeconds(3600),ZoneOffset.UTC));insert.setString(4,"ONCE_"+promotion.toString().substring(0,8));insert.executeUpdate();
+        }
+        assertEquals(MembershipOrderStatus.COMPLETED,service.purchase(new MembershipPurchaseRequest(player,"vip",1,UpgradeMode.NONE,"once-a-"+player,"TEST","ONCE")).toCompletableFuture().get().status());
+        for(int i=0;i<3;i++) assertEquals(80,service.menu(player,"ONCE").toCompletableFuture().get().tiers().getFirst().quote().finalPricePoints());
+        assertEquals("DISCOUNT_CODE_LIMIT_REACHED",service.purchase(new MembershipPurchaseRequest(player,"vip",1,UpgradeMode.NONE,"once-b-"+player,"TEST","ONCE")).toCompletableFuture().get().errorCode());
+        assertEquals(1,points.debits.get());
+    }
+
+    @Test
+    void unboundAndStaffCanPreviewButCannotPurchaseAndPreviewNeverConsumesUses() throws Exception {
+        UUID player=UUID.randomUUID();
+        promotions.code=new Promotion(UUID.randomUUID(),"Preview",null,2000,NOW.minusSeconds(60),NOW.plusSeconds(3600),0,"ACTIVE","PREVIEW");
+        service=new JdbcMembershipService(store,points,promotions,
+            ignored->CompletableFuture.completedFuture(new MembershipAccess(accessGroups)),Clock.fixed(NOW,ZoneOffset.UTC),60,365,
+            java.util.Set.of("helper","mod","admin","owner"),java.util.Set.of("vip","vip_plus","mvp","mvp_plus"),true,projectionSignals::incrementAndGet);
+        for(int i=0;i<3;i++) assertEquals(80,service.menu(player,"PREVIEW").toCompletableFuture().get().tiers().getFirst().quote().finalPricePoints());
+        org.junit.jupiter.api.Assertions.assertThrows(java.util.concurrent.ExecutionException.class,()->service.purchase(
+            new MembershipPurchaseRequest(player,"vip",1,UpgradeMode.NONE,"unbound-preview-"+player,"TEST","PREVIEW")).toCompletableFuture().get());
+        try(Connection connection=database.connection();PreparedStatement insert=connection.prepareStatement("INSERT INTO qqbotauth_bindings(minecraft_uuid,minecraft_name,group_openid,member_openid,bound_at,verification_status) VALUES (?,'PreviewTest','preview-test',?,0,'VERIFIED')")) {
+            insert.setString(1,player.toString());insert.setString(2,player.toString());insert.executeUpdate();
+        }
+        accessGroups=java.util.Set.of("admin");
+        assertEquals(80,service.menu(player,"PREVIEW").toCompletableFuture().get().tiers().getFirst().quote().finalPricePoints());
+        org.junit.jupiter.api.Assertions.assertThrows(java.util.concurrent.ExecutionException.class,()->service.purchase(
+            new MembershipPurchaseRequest(player,"vip",1,UpgradeMode.NONE,"staff-preview-"+player,"TEST","PREVIEW")).toCompletableFuture().get());
+        assertEquals(0,points.debits.get());
+        assertEquals(new UUID(0,0),promotions.previewPlayer);
+        try(Connection connection=database.connection();PreparedStatement query=connection.prepareStatement("SELECT COUNT(*) FROM cct_membership_orders WHERE player_uuid=?")) {
+            query.setBytes(1,UuidBinary.encode(player));try(var result=query.executeQuery()) {result.next();assertEquals(0,result.getInt(1));}
+        }
+    }
+
     @AfterEach
     void tearDown() {
         executors.close();
@@ -156,6 +241,13 @@ final class JdbcMembershipServiceIntegrationTest {
             UUID.randomUUID(), "八折", null, 2_000,
             NOW.minusSeconds(10), NOW.plusSeconds(3600), 10, "ACTIVE"
         );
+
+        try (Connection connection=database.connection(); PreparedStatement insert=connection.prepareStatement(
+            "INSERT INTO cct_promotions(promotion_id,name,scope,percent_off_bps,starts_at,ends_at,priority,status,created_by,reason) VALUES (?, 'Offer', 'MEMBERSHIP_ALL', 2000, ?, ?, 10, 'ACTIVE', 'test', 'test')")) {
+            insert.setBytes(1,UuidBinary.encode(promotions.active.promotionId()));
+            insert.setObject(2,java.time.LocalDateTime.ofInstant(NOW.minusSeconds(10),ZoneOffset.UTC));
+            insert.setObject(3,java.time.LocalDateTime.ofInstant(NOW.plusSeconds(3600),ZoneOffset.UTC)); insert.executeUpdate();
+        }
 
         MembershipOrderResult vipPlus = service.purchase(
             request(playerUuid, "vip_plus", UpgradeMode.CREDIT, "chain-vip-plus")
@@ -415,6 +507,17 @@ final class JdbcMembershipServiceIntegrationTest {
 
     private static final class FakePromotionService implements PromotionService {
         private volatile Promotion active = Promotion.none();
+        private volatile Promotion code;
+        private volatile UUID previewPlayer;
+        @Override
+        public CompletionStage<Promotion> forCodeAny(String value,UUID playerUuid,Instant now) {
+            previewPlayer=playerUuid; return forCode(value,"vip",now);
+        }
+        @Override
+        public CompletionStage<Promotion> forCode(String value,String tier,Instant now) {
+            return code != null && value.equals(code.discountCode()) ? CompletableFuture.completedFuture(code)
+                : CompletableFuture.failedFuture(new IllegalArgumentException("Code unavailable"));
+        }
 
         @Override
         public CompletionStage<Promotion> activeForMembership(String tierKey, Instant now) {

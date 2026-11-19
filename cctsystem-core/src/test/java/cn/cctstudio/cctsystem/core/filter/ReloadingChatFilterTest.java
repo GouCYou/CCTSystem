@@ -13,6 +13,21 @@ final class ReloadingChatFilterTest {
     Path temporaryDirectory;
 
     @Test
+    void savesAtomicallyAppliesImmediatelyAndRejectsStaleEdits() throws Exception {
+        ReloadingChatFilter filter = filter("{\"enabled\":true,\"words\":[\"old\"]}");
+        var before = filter.document();
+        var after = filter.saveDocument("{\"enabled\":true,\"words\":[\"new\"]}", before.revision());
+        assertEquals("*** old", filter.filter("new old"));
+        assertEquals(before.content(), Files.readString(filter.file().resolveSibling("chat-filter.json.bak")));
+        org.junit.jupiter.api.Assertions.assertNotEquals(before.revision(), after.revision());
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+            () -> filter.saveDocument(before.content(), before.revision()));
+        org.junit.jupiter.api.Assertions.assertThrows(java.io.IOException.class,
+            () -> filter.saveDocument("{broken", after.revision()));
+        assertEquals(after.content(), filter.document().content());
+    }
+
+    @Test
     void preservesVisibleLengthAndMatchesSeparatedText() throws Exception {
         ReloadingChatFilter filter = filter("""
             {
@@ -57,6 +72,24 @@ final class ReloadingChatFilterTest {
 
         assertEquals("这不是坏话", filter.filter("这不是坏话"));
         assertEquals("这是**", filter.filter("这是坏话"));
+    }
+
+    @Test
+    void auditRetainsMatchingRuleThroughNormalizationAndRespectsAllowlist() throws Exception {
+        ReloadingChatFilter filter = filter("""
+            {"enabled":true,"ignoreSeparators":true,"normalizeLeetspeak":true,
+             "words":["fuck","坏话"],"allowlist":["不是坏话"],"commands":{"msg":1,"pc":0}}
+            """);
+        var result = filter.analyze("不是坏话 f.u.c.k f.u.c.k");
+        assertEquals(java.util.List.of("fuck"), result.matchedWords());
+        assertEquals("不是坏话 ******* *******", result.filtered());
+        var command = filter.analyzeCommand("/cmi msg Player 坏话");
+        assertEquals(java.util.List.of("坏话"), command.matchedWords());
+        assertEquals("/cmi msg Player **", command.filtered());
+        org.junit.jupiter.api.Assertions.assertTrue(filter.isChatCommand("/cmi msg Player hi"));
+        org.junit.jupiter.api.Assertions.assertTrue(filter.isChatCommand("/minecraft:msg Player hi"));
+        org.junit.jupiter.api.Assertions.assertFalse(filter.isChatCommand("/pc"));
+        org.junit.jupiter.api.Assertions.assertFalse(filter.isChatCommand("/login secret"));
     }
 
     private ReloadingChatFilter filter(String json) throws Exception {

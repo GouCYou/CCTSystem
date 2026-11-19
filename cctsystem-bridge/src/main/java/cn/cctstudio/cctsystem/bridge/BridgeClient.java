@@ -56,7 +56,7 @@ public final class BridgeClient implements LifecycleComponent, BridgeRpcClient {
     private final AtomicBoolean stopped = new AtomicBoolean(true);
     private final AtomicBoolean connecting = new AtomicBoolean();
     private final AtomicInteger reconnectAttempts = new AtomicInteger();
-    private final AtomicLong outboundSequence = new AtomicLong();
+    private volatile BridgeFrameSender sender;
     private final AtomicLong inboundSequence = new AtomicLong();
     private final AtomicLong lastServerActivityNanos = new AtomicLong();
     private volatile HttpClient httpClient;
@@ -152,7 +152,8 @@ public final class BridgeClient implements LifecycleComponent, BridgeRpcClient {
             PendingCall pending = pendingCalls.remove(requestId);
             if (pending != null) {
                 pending.result().completeExceptionally(
-                    new BridgeCallException("BRIDGE_TIMEOUT", "Minecraft service timed out", true)
+                    new BridgeCallException("BRIDGE_TIMEOUT", "Worker response timed out (node=" + nodeConfig.nodeId()
+                        + ", operation=" + operation + ", request=" + requestId + ")", true)
                 );
             }
         }, timeoutMillis, TimeUnit.MILLISECONDS);
@@ -162,7 +163,6 @@ public final class BridgeClient implements LifecycleComponent, BridgeRpcClient {
         frame.put("version", Protocol.VERSION);
         frame.put("kind", "call");
         frame.put("requestId", requestId);
-        frame.put("sequence", outboundSequence.incrementAndGet());
         frame.put("capability", capability.value());
         frame.put("operation", operation);
         frame.put("deadline", Instant.now().plusMillis(timeoutMillis).toString());
@@ -172,25 +172,17 @@ public final class BridgeClient implements LifecycleComponent, BridgeRpcClient {
             frame.put("idempotencyKey", idempotencyKey);
         }
         frame.set("payload", payload == null ? NullNode.getInstance() : payload);
-        try {
-            webSocket.sendText(mapper.writeValueAsString(frame), true).whenComplete((ignored, failure) -> {
-                if (failure != null) {
-                    PendingCall pending = pendingCalls.remove(requestId);
-                    if (pending != null) {
-                        pending.timer().cancel(false);
-                        pending.result().completeExceptionally(
-                            new BridgeCallException("BRIDGE_DISCONNECTED", "Worker bridge is disconnected", true)
-                        );
-                    }
+        sendJson(webSocket, frame).whenComplete((ignored, failure) -> {
+            if (failure != null) {
+                PendingCall pending = pendingCalls.remove(requestId);
+                if (pending != null) {
+                    pending.timer().cancel(false);
+                    pending.result().completeExceptionally(
+                        new BridgeCallException("BRIDGE_DISCONNECTED", "Worker bridge is disconnected", true)
+                    );
                 }
-            });
-        } catch (JsonProcessingException | RuntimeException failure) {
-            PendingCall pending = pendingCalls.remove(requestId);
-            if (pending != null) {
-                pending.timer().cancel(false);
             }
-            result.completeExceptionally(failure);
-        }
+        });
         return result;
     }
 
@@ -223,26 +215,36 @@ public final class BridgeClient implements LifecycleComponent, BridgeRpcClient {
             .whenComplete((webSocket, throwable) -> {
                 connecting.set(false);
                 if (throwable != null) {
-                    logger.warn("Worker bridge connection failed: " + rootMessage(throwable));
+                    Throwable cause = unwrap(throwable);
+                    if (temporaryConnectionFailure(cause)) {
+                        logger.info("Worker bridge temporarily unavailable; reconnecting: " + rootMessage(cause));
+                    } else {
+                        logger.warn("Worker bridge connection failed", cause);
+                    }
                     scheduleReconnect();
                 }
             });
     }
 
-    private void onOpen(WebSocket webSocket) {
+    private synchronized void onOpen(WebSocket webSocket) {
+        if (stopped.get()) {
+            webSocket.abort();
+            return;
+        }
+        sender = new BridgeFrameSender(webSocket, mapper);
         WebSocket previous = socket.getAndSet(webSocket);
         if (previous != null && previous != webSocket) {
             previous.abort();
         }
         reconnectAttempts.set(0);
         inboundSequence.set(0);
-        outboundSequence.set(0);
         lastServerActivityNanos.set(System.nanoTime());
         sendHello(webSocket);
-        logger.info("Worker bridge connected for node " + nodeConfig.nodeId());
+        if (socket.get() == webSocket) logger.info("Worker bridge connected for node " + nodeConfig.nodeId());
     }
 
     private void onText(WebSocket webSocket, String message) {
+        if (socket.get() != webSocket || stopped.get()) return;
         try {
             JsonNode tree = mapper.readTree(message);
             validateEnvelope(tree);
@@ -258,7 +260,16 @@ public final class BridgeClient implements LifecycleComponent, BridgeRpcClient {
                 return;
             }
             RpcRequest request = mapper.treeToValue(tree, RpcRequest.class);
-            validateRequest(request);
+            try {
+                validateRequest(request);
+            } catch (RpcHandlingException rejection) {
+                sendResponse(webSocket, request.requestId(), NullNode.getInstance(),
+                    new RpcError(rejection.code(), rejection.getMessage(), rejection.retryable()));
+                if (!"REQUEST_EXPIRED".equals(rejection.code())) {
+                    logger.warn("Rejected invalid worker bridge request: " + rejection.code());
+                }
+                return;
+            }
             router.handle(new BridgeRpcCall(
                 request.requestId(),
                 request.operation(),
@@ -337,7 +348,6 @@ public final class BridgeClient implements LifecycleComponent, BridgeRpcClient {
         ObjectNode frame = mapper.createObjectNode();
         frame.put("version", Protocol.VERSION);
         frame.put("kind", "hello");
-        frame.put("sequence", outboundSequence.incrementAndGet());
         frame.set("payload", mapper.valueToTree(hello));
         sendJson(webSocket, frame);
     }
@@ -347,7 +357,7 @@ public final class BridgeClient implements LifecycleComponent, BridgeRpcClient {
             Protocol.VERSION,
             "response",
             requestId,
-            outboundSequence.incrementAndGet(),
+            0L,
             error == null,
             payload == null ? NullNode.getInstance() : payload,
             error
@@ -355,18 +365,34 @@ public final class BridgeClient implements LifecycleComponent, BridgeRpcClient {
         sendJson(webSocket, response);
     }
 
-    private void sendJson(WebSocket webSocket, Object value) {
-        try {
-            webSocket.sendText(mapper.writeValueAsString(value), true);
-        } catch (JsonProcessingException exception) {
-            logger.error("Unable to serialize worker bridge message", exception);
+    private synchronized CompletableFuture<WebSocket> sendJson(WebSocket webSocket, Object value) {
+        BridgeFrameSender current = sender;
+        if (socket.get() != webSocket || current == null || !current.matches(webSocket) || stopped.get()) {
+            return CompletableFuture.failedFuture(
+                new BridgeCallException("BRIDGE_DISCONNECTED", "Worker bridge is disconnected", true));
         }
+        ObjectNode frame = mapper.valueToTree(value);
+        return current.send(frame).orTimeout(bridgeConfig.connectTimeoutSeconds(), TimeUnit.SECONDS)
+            .whenComplete((ignored, failure) -> {
+                if (failure != null) {
+                    if (unwrap(failure) instanceof JsonProcessingException) {
+                        logger.error("Unable to serialize worker bridge message", unwrap(failure));
+                    }
+                    disconnected(webSocket, "send failed: " + rootMessage(failure), !temporaryConnectionFailure(unwrap(failure)));
+                    webSocket.abort();
+                }
+            });
     }
 
     private void disconnected(WebSocket webSocket, String reason) {
+        disconnected(webSocket, reason, false);
+    }
+
+    private void disconnected(WebSocket webSocket, String reason, boolean unexpected) {
         if (socket.compareAndSet(webSocket, null) && !stopped.get()) {
             failPending(new BridgeCallException("BRIDGE_DISCONNECTED", "Worker bridge disconnected", true));
-            logger.warn("Worker bridge disconnected: " + reason);
+            if (unexpected) logger.warn("Worker bridge connection rejected or failed unexpectedly: " + reason);
+            else logger.info("Worker bridge connection interrupted; reconnecting: " + reason);
             scheduleReconnect();
         }
     }
@@ -405,24 +431,20 @@ public final class BridgeClient implements LifecycleComponent, BridgeRpcClient {
         ObjectNode frame = mapper.createObjectNode();
         frame.put("version", Protocol.VERSION);
         frame.put("kind", "heartbeat");
-        frame.put("sequence", outboundSequence.incrementAndGet());
-        try {
-            existing.sendText(mapper.writeValueAsString(frame), true)
-                .whenComplete((ignored, failure) -> {
-                    if (failure != null) {
-                        existing.abort();
-                        disconnected(existing, "heartbeat failed: " + rootMessage(failure));
-                    }
-                });
-        } catch (JsonProcessingException | RuntimeException failure) {
-            existing.abort();
-            disconnected(existing, "heartbeat failed: " + rootMessage(failure));
-        }
+        sendJson(existing, frame);
+    }
+
+    private static boolean temporaryConnectionFailure(Throwable cause) {
+        return cause instanceof java.util.concurrent.TimeoutException
+            || (cause instanceof java.io.IOException
+                && !(cause instanceof java.net.http.WebSocketHandshakeException)
+                && !(cause instanceof javax.net.ssl.SSLException))
+            || (cause instanceof BridgeCallException bridge && bridge.retryable());
     }
 
     private static Throwable unwrap(Throwable throwable) {
-        if ((throwable instanceof CompletionException) && throwable.getCause() != null) {
-            return throwable.getCause();
+        while (throwable instanceof CompletionException && throwable.getCause() != null) {
+            throwable = throwable.getCause();
         }
         return throwable;
     }
@@ -459,20 +481,21 @@ public final class BridgeClient implements LifecycleComponent, BridgeRpcClient {
 
         @Override
         public java.util.concurrent.CompletionStage<?> onPong(WebSocket webSocket, ByteBuffer message) {
-            lastServerActivityNanos.set(System.nanoTime());
+            if (socket.get() == webSocket) lastServerActivityNanos.set(System.nanoTime());
             webSocket.request(1);
             return CompletableFuture.completedFuture(null);
         }
 
         @Override
         public java.util.concurrent.CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
-            disconnected(webSocket, statusCode + " " + reason);
+            disconnected(webSocket, statusCode + " " + reason,
+                statusCode == 4002 || statusCode == 4003 || statusCode == 1003 || statusCode == 1007 || statusCode == 1009);
             return CompletableFuture.completedFuture(null);
         }
 
         @Override
         public void onError(WebSocket webSocket, Throwable error) {
-            disconnected(webSocket, rootMessage(error));
+            disconnected(webSocket, rootMessage(error), !temporaryConnectionFailure(unwrap(error)));
         }
     }
 

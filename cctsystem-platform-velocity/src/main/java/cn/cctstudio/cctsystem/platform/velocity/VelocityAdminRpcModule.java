@@ -52,11 +52,13 @@ final class VelocityAdminRpcModule implements CctModule {
         Set.of(Capability.ADMIN_READ, Capability.ADMIN_MUTATE)
     );
 
+    private final java.util.function.Supplier<cn.cctstudio.cctsystem.core.filter.ReloadingChatFilter> chatRules;
     private final ProxyServer proxy;
     private final Path serverRoot;
     private ModuleContext context;
 
-    VelocityAdminRpcModule(ProxyServer proxy, Path dataDirectory) {
+    VelocityAdminRpcModule(ProxyServer proxy, Path dataDirectory, java.util.function.Supplier<cn.cctstudio.cctsystem.core.filter.ReloadingChatFilter> chatRules) {
+        this.chatRules = chatRules;
         this.proxy = proxy;
         Path plugins = dataDirectory.getParent();
         this.serverRoot = plugins == null || plugins.getParent() == null
@@ -77,6 +79,7 @@ final class VelocityAdminRpcModule implements CctModule {
         router.registerCall("admin.players.online", this::listOnlinePlayers);
         router.registerCall("admin.server.logs", this::serverLogs);
         router.registerCall("admin.server.command", this::serverCommand);
+        cn.cctstudio.cctsystem.bridge.ChatFilterAdminRpc.register(router, chatRules, context.executors().blocking());
         return CompletableFuture.completedFuture(null);
     }
 

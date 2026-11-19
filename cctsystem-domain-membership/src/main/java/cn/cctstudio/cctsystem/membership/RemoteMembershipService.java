@@ -39,10 +39,18 @@ final class RemoteMembershipService implements MembershipService {
     }
 
     @Override
-    public CompletionStage<MembershipMenuSnapshot> menu(UUID playerUuid) {
+    public CompletionStage<MembershipMenuSnapshot> menu(UUID playerUuid) { return menu(playerUuid,null); }
+
+    @Override
+    public CompletionStage<MembershipMenuSnapshot> menu(UUID playerUuid,String discountCode) {
         ObjectNode payload = JSON.createObjectNode().put("playerUuid", playerUuid.toString());
+        payload.put("discountCode",discountCode);
         return call(Capability.MEMBERSHIP_READ, MembershipRpcModule.MENU_OPERATION,
-            payload, null, RemoteMembershipService::menuSnapshot);
+            payload, null, node -> {
+                if(discountCode!=null && !discountCode.isBlank() && !node.path("discountCodeHandled").asBoolean(false))
+                    throw new MembershipException("DISCOUNT_CODE_UNAVAILABLE","Discount code service unavailable",true);
+                return menuSnapshot(node);
+            });
     }
 
     @Override
@@ -52,8 +60,14 @@ final class RemoteMembershipService implements MembershipService {
         int months,
         UpgradeMode upgradeMode
     ) {
+        return quote(playerUuid,tierKey,months,upgradeMode,null);
+    }
+
+    @Override
+    public CompletionStage<MembershipQuote> quote(UUID playerUuid, String tierKey, int months, UpgradeMode upgradeMode, String discountCode) {
         ObjectNode payload = JSON.createObjectNode();
         payload.put("playerUuid", playerUuid.toString());
+        payload.put("discountCode", discountCode);
         payload.put("tierKey", tierKey);
         payload.put("months", months);
         payload.put("upgradeMode", upgradeMode.name());
@@ -69,6 +83,7 @@ final class RemoteMembershipService implements MembershipService {
         payload.put("months", request.months());
         payload.put("upgradeMode", request.upgradeMode().name());
         payload.put("origin", request.origin());
+        payload.put("discountCode", request.discountCode());
         return call(Capability.MEMBERSHIP_MUTATE, MembershipRpcModule.PURCHASE_OPERATION,
             payload, request.idempotencyKey(), RemoteMembershipService::order);
     }

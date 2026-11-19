@@ -335,6 +335,7 @@ final class JdbcMembershipStore {
     ) {
         return async(() -> {
             try (Connection connection = database.connection()) {
+                connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
                 Optional<MembershipOrderResult> existing = findByIdempotency(
                     connection, request.playerUuid(), request.idempotencyKey()
                 );
@@ -616,6 +617,10 @@ final class JdbcMembershipStore {
         UUID operationId,
         Instant now
     ) throws SQLException {
+        // Serialize quota checks before the order's promotion FK acquires a shared lock.
+        if (quote.promotionId()!=null) try (PreparedStatement lock=connection.prepareStatement("SELECT promotion_id FROM cct_promotions WHERE promotion_id=? FOR UPDATE")) {
+            lock.setBytes(1,UuidBinary.encode(quote.promotionId())); try(var rows=lock.executeQuery()) { rows.next(); }
+        }
         insertOperation(connection, request, operationId);
         insertOrder(connection, request, quote, orderId, operationId);
         if (!insertFence(connection, request.playerUuid(), operationId)) {
@@ -643,6 +648,10 @@ final class JdbcMembershipStore {
         if (!promotionStillValid(connection, quote, now)) {
             failInitial(connection, orderId, operationId, "MEMBERSHIP_QUOTE_STALE");
             return PreparedMembershipOrder.existing(findOrder(connection, orderId).orElseThrow());
+        }
+        if (!discountCodeQuotaAvailable(connection,quote,request.playerUuid(),orderId)) {
+            failInitial(connection,orderId,operationId,"DISCOUNT_CODE_LIMIT_REACHED");
+            return PreparedMembershipOrder.existing(findOrder(connection,orderId).orElseThrow());
         }
         transition(connection, orderId, MembershipOrderStatus.CREATED,
             MembershipOrderStatus.RESERVED, null);
@@ -1536,6 +1545,25 @@ final class JdbcMembershipStore {
         deleteFenceByOperation(connection, operationId);
     }
 
+    private boolean discountCodeQuotaAvailable(Connection connection, MembershipQuote quote, UUID player, UUID currentOrder) throws SQLException {
+        if (quote.promotionId()==null) return true;
+        Integer personalLimit=null, playerLimit=null;
+        try (PreparedStatement query=connection.prepareStatement("SELECT discount_code,max_uses_per_player,max_players FROM cct_promotions WHERE promotion_id=?")) {
+            query.setBytes(1,UuidBinary.encode(quote.promotionId())); try(ResultSet rows=query.executeQuery()) {
+                if (!rows.next() || rows.getString(1)==null) return true;
+                personalLimit=(Integer)rows.getObject(2); playerLimit=(Integer)rows.getObject(3);
+            }
+        }
+        if (personalLimit==null && playerLimit==null) return true;
+        java.util.Set<UUID> players=new java.util.HashSet<>(); int personal=0;
+        // Parent promotion lock serializes reservations; READ COMMITTED sees earlier committed orders.
+        try (PreparedStatement query=connection.prepareStatement("SELECT player_uuid FROM cct_membership_orders WHERE promotion_id=? AND order_id<>? AND status NOT IN ('FAILED','COMPENSATED')")) {
+            query.setBytes(1,UuidBinary.encode(quote.promotionId())); query.setBytes(2,UuidBinary.encode(currentOrder));
+            try(ResultSet rows=query.executeQuery()) { while(rows.next()) { UUID other=UuidBinary.decode(rows.getBytes(1)); players.add(other); if(other.equals(player)) personal++; } }
+        }
+        return (personalLimit==null || personal<personalLimit) && (playerLimit==null || players.size()<playerLimit);
+    }
+
     private boolean promotionStillValid(Connection connection, MembershipQuote quote, Instant now)
         throws SQLException {
         if (quote.promotionId() == null) {
@@ -1546,11 +1574,15 @@ final class JdbcMembershipStore {
             FROM cct_promotions
             WHERE promotion_id = ? AND status = 'ACTIVE'
               AND starts_at <= ? AND ends_at > ?
+              AND (scope IN ('MEMBERSHIP_ALL', 'MEMBERSHIP_CODE_ALL') OR EXISTS (
+                SELECT 1 FROM cct_promotion_targets t WHERE t.promotion_id=cct_promotions.promotion_id AND t.tier_key=?
+              ))
             FOR UPDATE
             """)) {
             query.setBytes(1, UuidBinary.encode(quote.promotionId()));
             setInstant(query, 2, now);
             setInstant(query, 3, now);
+            query.setString(4, quote.targetTier().key());
             try (ResultSet result = query.executeQuery()) {
                 return result.next() && result.getInt(1) == quote.promotionOffBps();
             }

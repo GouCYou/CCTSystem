@@ -40,6 +40,7 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
     private static final DateTimeFormatter INPUT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
     private static final DateTimeFormatter OUTPUT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
+    private final CctConfig config;
     private final ProviderRegistry providers;
     private final PlatformTaskExecutor platformTasks;
     private final CctLogger logger;
@@ -57,6 +58,7 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         PaperMenus menus,
         PaperTitleService titles
     ) {
+        this.config = config;
         this.providers = providers;
         this.platformTasks = platformTasks;
         this.logger = logger;
@@ -86,6 +88,9 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
                 sender.sendMessage(messages.component("commands.reload-failed"));
             }
             return true;
+        }
+        if (args.length >= 1 && args[0].equalsIgnoreCase("discountcode")) {
+            discountCode(sender,args); return true;
         }
         if (args.length >= 2 && args[0].equalsIgnoreCase("member")) {
             member(sender, args);
@@ -122,6 +127,41 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
             usage(sender);
         }
         return true;
+    }
+
+    private void discountCode(CommandSender sender, String[] args) {
+        PromotionService service = providers.find(PromotionServiceProvider.KEY).orElse(null);
+        if (service == null) { sender.sendMessage(messages.component("admin.promotion-service-unavailable")); return; }
+        try {
+            String action = args.length > 1 ? args[1].toLowerCase(java.util.Locale.ROOT) : "help";
+            if (action.equals("list")) {
+                service.listCodes(Instant.now()).whenComplete((items,failure) -> main(() -> {
+                    if (failure != null) { sender.sendMessage(messages.component("discount-code.failed")); return; }
+                    if (items.isEmpty()) sender.sendMessage(messages.component("discount-code.empty"));
+                    for (Promotion p : items) sender.sendMessage(messages.component("discount-code.entry",Map.of(
+                        "id",p.promotionId(),"code",p.discountCode(),"off",p.percentOffBps()/100.0,
+                        "state",!p.status().equals("ACTIVE") || !p.endsAt().isAfter(Instant.now()) ? "已失效" : p.startsAt().isAfter(Instant.now()) ? "未开始" : "生效中")));
+                })); return;
+            }
+            if (action.equals("delete") && args.length == 3) {
+                service.deleteCode(UUID.fromString(args[2])).whenComplete((deleted,failure) -> main(() ->
+                    sender.sendMessage(messages.component(failure == null && deleted ? "discount-code.deleted" : "discount-code.failed")))); return;
+            }
+            boolean update = action.equals("edit"); int offset = update ? 1 : 0;
+            if (!(action.equals("create") || update) || args.length < 7+offset) throw new IllegalArgumentException();
+            String code = args[2+offset].equalsIgnoreCase("random") ? UUID.randomUUID().toString().replace("-", "").substring(0,12).toUpperCase(java.util.Locale.ROOT) : args[2+offset];
+            int off = new BigDecimal(args[3+offset].replace("%", "")).multiply(BigDecimal.valueOf(100)).intValueExact();
+            String tier = args[4+offset].equalsIgnoreCase("all") ? null : args[4+offset];
+            if (tier != null && config.membership().tiers().stream().noneMatch(t -> t.key().equals(tier))) throw new IllegalArgumentException();
+            Instant starts = args[5+offset].equalsIgnoreCase("now") ? Instant.now() : LocalDateTime.parse(args[5+offset]).atZone(timezone).toInstant();
+            Instant ends = args[6+offset].equalsIgnoreCase("permanent") ? Instant.parse("9999-12-31T00:00:00Z") : LocalDateTime.parse(args[6+offset]).atZone(timezone).toInstant();
+            CreatePromotionRequest request = new CreatePromotionRequest(code,tier,off,starts,ends,0,sender.getName(),"管理折扣代码",code, args.length>7+offset && !args[7+offset].equalsIgnoreCase("unlimited") ? Integer.valueOf(args[7+offset]) : null,
+                args.length>8+offset && !args[8+offset].equalsIgnoreCase("unlimited") ? Integer.valueOf(args[8+offset]) : null);
+            (update ? service.updateCode(UUID.fromString(args[2]),request) : service.create(request)).whenComplete((p,failure) -> main(() ->
+                sender.sendMessage(failure == null ? messages.component("discount-code.saved",Map.of("code",p.discountCode(),"id",p.promotionId())) : messages.component("discount-code.failed"))));
+        } catch (IllegalArgumentException failure) {
+            sender.sendMessage(messages.component("discount-code.usage"));
+        }
     }
 
     private void redeem(CommandSender sender, String[] args) {
@@ -444,8 +484,9 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         String[] args
     ) {
         if (args.length == 1) {
-            return List.of("help", "reload", "discount", "member", "redeem", "prefix", "suffix");
+            return List.of("help", "reload", "discountcode", "discount", "member", "redeem", "prefix", "suffix");
         }
+        if (args.length == 2 && args[0].equalsIgnoreCase("discountcode")) return List.of("create","edit","delete","list");
         if (args.length == 2 && (args[0].equalsIgnoreCase("prefix")
             || args[0].equalsIgnoreCase("suffix"))) {
             return List.of("add", "remove", "list");

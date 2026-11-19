@@ -5,6 +5,7 @@ import cn.cctstudio.cctsystem.points.PointsMutationDisposition;
 import cn.cctstudio.cctsystem.points.PointsMutationResult;
 import cn.cctstudio.cctsystem.points.PointsService;
 import cn.cctstudio.cctsystem.promotion.PromotionService;
+import cn.cctstudio.cctsystem.promotion.Promotion;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
@@ -102,38 +103,31 @@ final class JdbcMembershipService implements MembershipService {
     }
 
     @Override
-    public CompletionStage<MembershipMenuSnapshot> menu(UUID playerUuid) {
+    public CompletionStage<MembershipMenuSnapshot> menu(UUID playerUuid) { return menu(playerUuid,null); }
+
+    @Override
+    public CompletionStage<MembershipMenuSnapshot> menu(UUID playerUuid, String discountCode) {
         Objects.requireNonNull(playerUuid, "playerUuid");
-        boolean publicPricing = PUBLIC_PRICING_PLAYER_UUID.equals(playerUuid);
         Instant now = clock.instant();
         return context(playerUuid, now).thenCompose(context -> {
-            if (!publicPricing && !context.sociallyBound()) {
-                return CompletableFuture.completedFuture(new MembershipMenuSnapshot(
-                    context.summary(), context.catalog().stream()
-                        .map(tier -> new MembershipMenuTier(tier, null, "MEMBERSHIP_BINDING_REQUIRED"))
-                        .toList()
-                ));
-            }
-            if (!publicPricing && MembershipPurchasePolicy.isBlocked(context.access(), purchaseBlockedGroups)) {
-                return CompletableFuture.completedFuture(new MembershipMenuSnapshot(
-                    context.summary(),
-                    context.catalog().stream()
-                        .map(tier -> new MembershipMenuTier(
-                            tier, null, "MEMBERSHIP_PURCHASE_FORBIDDEN"
-                        ))
-                        .toList()
-                ));
-            }
+            CompletionStage<Promotion> selected = discountCode==null || discountCode.isBlank()
+                ? CompletableFuture.completedFuture(Promotion.none())
+                : promotions.forCodeAny(discountCode,PUBLIC_PRICING_PLAYER_UUID,now).handle((value,failure) -> {
+                    if(failure!=null) {
+                        Throwable cause=unwrap(failure);
+                        if(cause instanceof IllegalArgumentException) throw new MembershipException("DISCOUNT_CODE_UNAVAILABLE","Discount code unavailable",false);
+                        throw new CompletionException(cause);
+                    }
+                    return value;
+                });
+            return selected.thenCompose(code -> {
             List<CompletableFuture<MembershipMenuTier>> tiers = new ArrayList<>();
             for (MembershipTier tier : context.catalog()) {
-                UpgradeMode mode = context.summary().active() != null
-                    && tier.priority() > context.summary().active().tier().priority()
-                    ? UpgradeMode.PAUSE
-                    : UpgradeMode.NONE;
                 tiers.add(promotions.activeForMembership(tier.key(), now)
+                    .thenApply(automatic -> code.active() && (code.targetTierKey()==null || code.targetTierKey().equals(tier.key())) && code.percentOffBps()>automatic.percentOffBps() ? code : automatic)
                     .thenApply(promotion -> new MembershipMenuTier(
                         tier,
-                        quote(context, tier, 1, mode, promotion, now),
+                        MembershipPricing.quote(tier,1,UpgradeMode.NONE,null,0,promotion,now,quoteTtlSeconds),
                         null
                     ))
                     .exceptionally(failure -> new MembershipMenuTier(
@@ -145,6 +139,7 @@ final class JdbcMembershipService implements MembershipService {
                 .thenApply(ignored -> new MembershipMenuSnapshot(
                     context.summary(), tiers.stream().map(CompletableFuture::join).toList()
                 ));
+            });
         });
     }
 
@@ -155,6 +150,11 @@ final class JdbcMembershipService implements MembershipService {
         int months,
         UpgradeMode upgradeMode
     ) {
+        return quote(playerUuid,tierKey,months,upgradeMode,null);
+    }
+
+    @Override
+    public CompletionStage<MembershipQuote> quote(UUID playerUuid, String tierKey, int months, UpgradeMode upgradeMode, String discountCode) {
         Objects.requireNonNull(playerUuid, "playerUuid");
         String normalizedTier = normalizeTier(tierKey);
         UpgradeMode mode = Objects.requireNonNullElse(upgradeMode, UpgradeMode.NONE);
@@ -170,6 +170,18 @@ final class JdbcMembershipService implements MembershipService {
                         "MEMBERSHIP_TIER_UNAVAILABLE", "Membership tier is unavailable", false
                     ));
                 return promotions.activeForMembership(normalizedTier, now)
+                    .thenCompose(automatic -> {
+                        if (discountCode == null || discountCode.isBlank()) return CompletableFuture.completedFuture(automatic);
+                        return promotions.forCode(discountCode, normalizedTier, playerUuid, now).handle((code, failure) -> {
+                            if (failure != null) {
+                                Throwable cause = failure;
+                                while (cause instanceof CompletionException && cause.getCause()!=null) cause = cause.getCause();
+                                if (cause instanceof IllegalArgumentException) throw new MembershipException("DISCOUNT_CODE_UNAVAILABLE", "Discount code unavailable", false);
+                                throw new CompletionException(cause);
+                            }
+                            return automatic.percentOffBps() >= code.percentOffBps() ? automatic : code;
+                        });
+                    })
                     .thenApply(promotion -> quote(context, target, months, mode, promotion, now));
             });
     }
@@ -192,7 +204,7 @@ final class JdbcMembershipService implements MembershipService {
             request.playerUuid(),
             request.tierKey(),
             request.months(),
-            request.upgradeMode()
+            request.upgradeMode(), request.discountCode()
         ).thenCompose(quote -> store.prepare(request, quote, orderId, operationId, clock.instant()))
             .thenCompose(prepared -> {
                 if (!prepared.proceed()) {

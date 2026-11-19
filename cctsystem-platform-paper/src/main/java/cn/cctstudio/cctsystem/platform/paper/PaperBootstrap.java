@@ -54,6 +54,12 @@ public final class PaperBootstrap extends JavaPlugin {
         return SocialBindingRewards.deliver(bridge, playerUuid);
     }
 
+    private PaperChatFilter chatFilter;
+    cn.cctstudio.cctsystem.core.filter.ReloadingChatFilter chatRules() {
+        if (chatFilter == null) throw new IllegalStateException("Chat filter unavailable");
+        return chatFilter.rules();
+    }
+
     @Override
     public void onEnable() {
         PaperLogger logger = new PaperLogger(getLogger());
@@ -117,7 +123,7 @@ public final class PaperBootstrap extends JavaPlugin {
             PaperChatStyleProvider chatStyle = new PaperChatStyleProvider(
                 this, messages, titles, nicknames, logger, config.serverId()
             );
-            PaperChatFilter chatFilter = new PaperChatFilter(this, logger);
+            chatFilter = new PaperChatFilter(this, logger, created.providers(), created.executors().blocking(), config.serverId());
             getServer().getPluginManager().registerEvents(chatFilter, this);
             if ("duel".equalsIgnoreCase(config.serverId())
                 || "duels".equalsIgnoreCase(config.serverId())) {

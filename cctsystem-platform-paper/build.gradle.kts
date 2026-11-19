@@ -3,6 +3,8 @@ plugins {
 }
 
 dependencies {
+    testImplementation("net.kyori:adventure-api:4.26.1")
+    testImplementation("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
     implementation(project(":cctsystem-core"))
     implementation(project(":cctsystem-storage-mysql"))
     implementation(project(":cctsystem-bridge"))

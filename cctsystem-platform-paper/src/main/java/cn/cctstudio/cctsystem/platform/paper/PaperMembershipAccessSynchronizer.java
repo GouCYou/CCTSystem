@@ -3,6 +3,7 @@ package cn.cctstudio.cctsystem.platform.paper;
 import cn.cctstudio.cctsystem.core.logging.CctLogger;
 import cn.cctstudio.cctsystem.core.provider.ProviderRegistry;
 import cn.cctstudio.cctsystem.membership.MembershipServiceProvider;
+import cn.cctstudio.cctsystem.membership.MembershipFailures;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -71,7 +72,7 @@ final class PaperMembershipAccessSynchronizer implements AutoCloseable {
                 memberships.reconcile(playerUuid).whenComplete((ignored, throwable) -> {
                     queued.remove(playerUuid);
                     if (throwable == null) return;
-                    logger.warn("Unable to reconcile membership after LuckPerms access changed", throwable);
+                    MembershipFailures.log(logger, "Membership access check after LuckPerms change", throwable);
                 }),
                 () -> queued.remove(playerUuid)
             );

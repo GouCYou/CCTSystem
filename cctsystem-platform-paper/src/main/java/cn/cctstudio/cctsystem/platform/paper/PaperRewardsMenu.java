@@ -409,7 +409,8 @@ final class PaperRewardsMenu implements Listener {
             RewardState state = holder.states.get(reward.key());
             boolean permitted = reward.permission().isBlank() || player.hasPermission(reward.permission());
             boolean available = holder.loaded && permitted && (state == null || state.available(Instant.now()));
-            Material material = available
+            // Missing membership access is not the same as an already claimed reward.
+            Material material = !permitted || available
                 ? item.material(Material.CHEST_MINECART)
                 : reward.claimedMaterial();
             ItemStack stack = new ItemStack(material);

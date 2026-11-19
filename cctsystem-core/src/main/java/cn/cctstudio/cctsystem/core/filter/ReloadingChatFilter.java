@@ -37,6 +37,13 @@ public final class ReloadingChatFilter {
         reload(true);
     }
 
+    public record Result(String filtered, List<String> matchedWords) {}
+
+    public Result analyze(String input) {
+        reloadIfDue();
+        return snapshot.analyze(input);
+    }
+
     public String filter(String input) {
         if (input == null || input.isEmpty()) return input;
         reloadIfDue();
@@ -44,26 +51,47 @@ public final class ReloadingChatFilter {
     }
 
     public String filterCommand(String commandLine) {
+        return analyzeCommand(commandLine).filtered();
+    }
+
+    public Result analyzeCommand(String commandLine) {
         if (commandLine == null || commandLine.isBlank() || commandLine.charAt(0) != '/') {
-            return commandLine;
+            return new Result(commandLine, List.of());
         }
         reloadIfDue();
         Snapshot current = snapshot;
-        if (!current.settings.enabled()) return commandLine;
+        if (!current.settings.enabled()) return new Result(commandLine, List.of());
         List<Token> tokens = commandTokens(commandLine);
-        if (tokens.isEmpty()) return commandLine;
+        if (!tokens.isEmpty() && tokens.get(0).value().equals("cmi")) tokens = tokens.subList(1, tokens.size());
+        if (tokens.isEmpty()) return new Result(commandLine, List.of());
+        List<Token> commandTokens = tokens;
         CommandMatch match = current.settings.commands().entrySet().stream()
-            .map(entry -> match(tokens, entry.getKey(), entry.getValue()))
+            .map(entry -> match(commandTokens, entry.getKey(), entry.getValue()))
             .filter(Objects::nonNull)
             .max(java.util.Comparator.comparingInt(CommandMatch::commandWords))
             .orElse(null);
-        if (match == null) return commandLine;
+        if (match == null) return new Result(commandLine, List.of());
         int contentToken = match.commandWords() + match.skippedArguments();
-        if (contentToken >= tokens.size()) return commandLine;
+        if (contentToken >= tokens.size()) return new Result(commandLine, List.of());
         int contentStart = tokens.get(contentToken).start();
-        String filtered = current.filter(commandLine.substring(contentStart));
-        if (filtered.equals(commandLine.substring(contentStart))) return commandLine;
-        return commandLine.substring(0, contentStart) + filtered;
+        Result result = current.analyze(commandLine.substring(contentStart));
+        String filtered = result.filtered();
+        if (filtered.equals(commandLine.substring(contentStart))) return new Result(commandLine, List.of());
+        return new Result(commandLine.substring(0, contentStart) + filtered, result.matchedWords());
+    }
+
+    public boolean isChatCommand(String commandLine) {
+        reloadIfDue();
+        if (commandLine == null || !commandLine.startsWith("/")) return false;
+        List<Token> tokens = commandTokens(commandLine);
+        if (!tokens.isEmpty() && tokens.get(0).value().equals("cmi")) {
+            tokens = tokens.subList(1, tokens.size());
+        }
+        for (var entry : snapshot.settings.commands().entrySet()) {
+            CommandMatch match = match(tokens, entry.getKey(), entry.getValue());
+            if (match != null && tokens.size() > match.commandWords() + match.skippedArguments()) return true;
+        }
+        return false;
     }
 
     private static List<Token> commandTokens(String commandLine) {
@@ -94,6 +122,37 @@ public final class ReloadingChatFilter {
             if (!words[index].equals(tokens.get(index).value())) return null;
         }
         return new CommandMatch(words.length, skippedArguments);
+    }
+
+    public record Document(String content, String revision) {}
+
+    public synchronized Document document() throws IOException {
+        String content = Files.readString(file);
+        return new Document(content, revision(content));
+    }
+
+    public synchronized Document saveDocument(String content, String expectedRevision) throws IOException {
+        if (content == null || content.length() > 512_000) throw new IllegalArgumentException("Invalid filter document");
+        Document before = document();
+        if (!before.revision().equals(expectedRevision)) throw new IllegalArgumentException("FILTER_DOCUMENT_CONFLICT");
+        ChatFilterSettings settings = JSON.readValue(content, ChatFilterSettings.class);
+        if (settings == null) throw new IllegalArgumentException("Invalid filter document");
+        Snapshot compiled = Snapshot.compile(settings);
+        Path temporary = Files.createTempFile(file.getParent(), ".chat-filter-", ".tmp");
+        try {
+            Files.copy(file, file.resolveSibling(file.getFileName()+".bak"), StandardCopyOption.REPLACE_EXISTING);
+            Files.writeString(temporary,content);
+            Files.move(temporary,file,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);
+            snapshot = compiled; loadedModified = Files.getLastModifiedTime(file);
+            nextCheckNanos.set(System.nanoTime()+checkDelayNanos());
+            return new Document(content,revision(content));
+        } finally { Files.deleteIfExists(temporary); }
+    }
+
+    private static String revision(String content) {
+        try { return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+            .digest(content.getBytes(java.nio.charset.StandardCharsets.UTF_8))); }
+        catch (java.security.NoSuchAlgorithmException failure) { throw new IllegalStateException(failure); }
     }
 
     public Path file() {
@@ -147,7 +206,7 @@ public final class ReloadingChatFilter {
         }
     }
 
-    private record Span(int start, int end) {
+    private record Span(int start, int end, String term) {
         boolean contains(int otherStart, int otherEnd) {
             return start <= otherStart && end >= otherEnd;
         }
@@ -162,7 +221,7 @@ public final class ReloadingChatFilter {
     private record Normalized(String value, int[] originalStarts, int[] originalEnds) {
     }
 
-    private record Output(int length, boolean wholeAsciiWord) {
+    private record Output(int length, boolean wholeAsciiWord, String term) {
     }
 
     private static final class Snapshot {
@@ -200,19 +259,21 @@ public final class ReloadingChatFilter {
             );
         }
 
-        String filter(String input) {
-            if (!settings.enabled() || blocked.empty) return input;
+        String filter(String input) { return analyze(input).filtered(); }
+
+        Result analyze(String input) {
+            if (input == null || input.isEmpty() || !settings.enabled() || blocked.empty) return new Result(input, List.of());
             Normalized normalized = normalize(
                 input, settings.ignoreSeparators(), settings.normalizeLeetspeak(), true
             );
-            if (normalized.value().isEmpty()) return input;
+            if (normalized.value().isEmpty()) return new Result(input, List.of());
             List<Span> allowedSpans = allowed.find(normalized.value());
             List<Span> blockedSpans = blocked.find(normalized.value()).stream()
                 .filter(span -> allowedSpans.stream().noneMatch(allowed ->
                     allowed.contains(span.start(), span.end())
                 ))
                 .toList();
-            if (blockedSpans.isEmpty()) return input;
+            if (blockedSpans.isEmpty()) return new Result(input, List.of());
             boolean[] masked = new boolean[input.length()];
             for (Span span : blockedSpans) {
                 int start = normalized.originalStarts()[span.start()];
@@ -227,7 +288,7 @@ public final class ReloadingChatFilter {
                 else output.appendCodePoint(codePoint);
                 offset += width;
             }
-            return output.toString();
+            return new Result(output.toString(), blockedSpans.stream().map(Span::term).distinct().toList());
         }
     }
 
@@ -331,7 +392,7 @@ public final class ReloadingChatFilter {
                 for (int point : points) node = node.next.computeIfAbsent(point, ignored -> new Node());
                 boolean wholeAsciiWord = points.length <= 2
                     && java.util.Arrays.stream(points).allMatch(ReloadingChatFilter::asciiWord);
-                node.outputs.add(new Output(points.length, wholeAsciiWord));
+                node.outputs.add(new Output(points.length, wholeAsciiWord, raw.strip()));
                 count++;
             }
             if (count == 0) return empty();
@@ -374,7 +435,7 @@ public final class ReloadingChatFilter {
                             || end < points.length && asciiWord(points[end]))) {
                         continue;
                     }
-                    result.add(new Span(start, end));
+                    result.add(new Span(start, end, output.term()));
                 }
             }
             return result;

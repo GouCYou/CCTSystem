@@ -54,7 +54,11 @@ public final class MembershipRpcModule implements CctModule {
             service.summary(requireUuid(payload)).thenApply(MembershipRpcModule::summaryJson)
         ));
         router.register(MENU_OPERATION, payload -> mapErrors(
-            service.menu(requireUuid(payload)).thenApply(MembershipRpcModule::menuJson)
+            service.menu(requireUuid(payload),payload.path("discountCode").asText(null)).thenApply(snapshot -> {
+                ObjectNode result=menuJson(snapshot);
+                result.put("discountCodeHandled",!payload.path("discountCode").asText("").isBlank());
+                return result;
+            })
         ));
         router.register(QUOTE_OPERATION, payload -> mapErrors(quote(payload, service)));
         router.registerCall(PURCHASE_OPERATION, call -> mapErrors(purchase(call, service)));
@@ -84,7 +88,7 @@ public final class MembershipRpcModule implements CctModule {
             requireUuid(payload),
             requireText(payload, "tierKey", 64),
             payload.path("months").asInt(0),
-            requireMode(payload)
+            requireMode(payload), payload.path("discountCode").asText(null)
         ).thenApply(MembershipRpcModule::quoteJson);
     }
 
@@ -99,7 +103,7 @@ public final class MembershipRpcModule implements CctModule {
             payload.path("months").asInt(0),
             requireMode(payload),
             call.idempotencyKey(),
-            requireText(payload, "origin", 32)
+            requireText(payload, "origin", 32), payload.path("discountCode").asText(null)
         )).thenApply(MembershipRpcModule::resultJson);
     }
 

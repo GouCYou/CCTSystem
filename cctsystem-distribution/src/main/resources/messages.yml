@@ -174,7 +174,7 @@ menus:
     redeem-lore: ["&7输入 /cct redeem <兑换码>"]
     redeem-hint: "&e请在聊天栏输入 /cct redeem <兑换码>"
     prefix-name: "&d称号库"
-    prefix-lore: ["&7管理前缀库与后缀库", "&7不会改变任何权限"]
+    prefix-lore: ["&7管理前缀库与后缀库"]
     nickname-name: "&a匿名模式"
     nickname-lore: ["&7打开 /cct nick 匿名身份设置"]
     close-name: "&c关闭"
@@ -267,7 +267,7 @@ menus:
     upgrade-mode-required: "请选择升级方式"
     duration-limit: "购买后的到期时间不能超过 365 天"
     forbidden: "当前权限组不可购买会员"
-    binding-required: "请先前往官网绑定 Discord，或加入 QQ 群完成 QQ 绑定"
+    binding-required: "请先加入 QQ 群完成 QQ 绑定，或前往官网绑定 Discord。绑定后即可免费兑换会员特权"
     stale-quote: "价格已变化，请重新确认"
     tier-unavailable: "该会员等级暂不可用"
     insufficient-points: "点券不足"
@@ -338,3 +338,15 @@ time:
   minutes: "{minutes}分"
   remaining-days-hours: "{days} 天 {hours} 小时"
   remaining-hours: "{hours} 小时"
+
+discount-code:
+  title: '&6折扣代码'
+  apply: '&a应用'
+  applying: '&e正在应用…'
+  invalid: '&c折扣代码无效、已失效或不适用于此会员。'
+  saved: '&a折扣代码 {code} 已保存。编号：{id}'
+  deleted: '&a折扣代码已删除。'
+  failed: '&c操作失败，请检查折扣代码和编号后重试。'
+  empty: '&7暂无折扣代码。'
+  entry: '&e{code} &7| 减免 {off}% | {state} | {id}'
+  usage: '&e/cctadmin discountcode create <代码或random> <减免百分比> <all或会员> <now或开始时间> <permanent或结束时间>；edit 在 create 的参数前加编号；delete <编号>；list。可在末尾添加每人次数（1 或 unlimited）和最多人数，不限填 unlimited。时间格式：2026-11-15T12:00'

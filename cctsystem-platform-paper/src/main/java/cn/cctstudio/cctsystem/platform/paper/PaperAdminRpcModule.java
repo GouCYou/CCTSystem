@@ -104,13 +104,25 @@ final class PaperAdminRpcModule implements CctModule {
         router.registerCall("admin.reports.list", this::listReports);
         router.registerCall("admin.reports.update", this::updateReport);
         router.registerCall("admin.redstone.list", this::listRedstoneIncidents);
+        router.registerCall("admin.chat-filter.list", this::listChatFilterIncidents);
         router.registerCall("admin.players.registered", this::listRegisteredPlayers);
+        router.registerCall("admin.players.detail", this::playerDetail);
         router.registerCall("admin.players.membership", this::mutatePlayerMembership);
         router.registerCall("admin.server.logs", this::serverLogs);
         router.registerCall("admin.server.command", this::serverCommand);
         router.registerCall("admin.audit.record", this::recordAudit);
         router.registerCall("admin.promotions.list", this::listPromotions);
         router.registerCall("admin.promotions.mutate", this::mutatePromotion);
+        router.registerCall("admin.discount-codes.list", call -> {
+            requireStaff(objectPayload(call));
+            return promotions().listCodes(Instant.now()).thenApply(items -> {
+                ArrayNode array = JSON.createArrayNode(); items.forEach(item -> array.add(promotionJson(item)));
+                return JSON.createObjectNode().set("items", array);
+            });
+        });
+        router.registerCall("admin.discount-codes.mutate", this::mutateDiscountCode);
+        cn.cctstudio.cctsystem.bridge.ChatFilterAdminRpc.register(router,
+            () -> ((PaperBootstrap) plugin).chatRules(), context.executors().blocking());
         if (context.config().roles().contains(NodeRole.POINTS_AUTHORITY)
             && context.providers().find(PointsServiceProvider.KEY).isPresent()) {
             bulkPoints = new BulkPointsAdmin(context);
@@ -174,11 +186,47 @@ final class PaperAdminRpcModule implements CctModule {
             "管理后台设置会员折扣")).thenApply(PaperAdminRpcModule::promotionJson);
     }
 
+    private CompletionStage<JsonNode> mutateDiscountCode(BridgeRpcCall call) {
+        JsonNode payload = objectPayload(call); requireStaff(payload);
+        String action = text(payload,"action",16);
+        if (action.equals("DELETE")) return promotions().deleteCode(uuid(payload,"promotionId"))
+            .thenApply(deleted -> JSON.createObjectNode().put("deleted",deleted));
+        if (!Set.of("CREATE","UPDATE").contains(action)) throw invalid("Invalid discount code action");
+        String tier = optionalText(payload,"targetTierKey",64,null);
+        if (tier != null && context.config().membership().tiers().stream().noneMatch(t -> t.key().equals(tier))) throw invalid("Invalid tier");
+        Instant starts = optionalInstant(payload,"startsAt");
+        Instant ends = optionalInstant(payload,"endsAt");
+        if (starts == null) throw invalid("Invalid start date");
+        if (ends == null) ends = Instant.parse("9999-12-31T00:00:00Z");
+        if (!ends.isAfter(starts)) throw invalid("Invalid end date");
+        CreatePromotionRequest request = new CreatePromotionRequest(text(payload,"name",64),tier,
+            integer(payload,"percentOffBps",1,10000),starts,ends,0,"web:"+text(payload,"actorName",64),
+            "管理折扣代码",text(payload,"discountCode",32),payload.path("maxUsesPerPlayer").isNull() || payload.path("maxUsesPerPlayer").isMissingNode() ? null : integer(payload,"maxUsesPerPlayer",1,1),
+            payload.path("maxPlayers").isNull() || payload.path("maxPlayers").isMissingNode() ? null : integer(payload,"maxPlayers",1,1000000));
+        return (action.equals("UPDATE") ? promotions().updateCode(uuid(payload,"promotionId"),request) : promotions().create(request))
+            .handle((item,failure) -> {
+                if (failure != null) {
+                    Throwable cause=failure; while(cause.getCause()!=null) cause=cause.getCause();
+                    if (cause instanceof IllegalArgumentException) throw new RpcHandlingException(
+                        "DISCOUNT_CODE_DUPLICATE".equals(cause.getMessage()) ? "DISCOUNT_CODE_DUPLICATE" : "DISCOUNT_CODE_INVALID", "DISCOUNT_CODE_DUPLICATE".equals(cause.getMessage()) ? "Discount code already exists" : "Discount code cannot be saved",false);
+                    throw new java.util.concurrent.CompletionException(failure);
+                }
+                return promotionJson(item);
+            });
+    }
+
     private static ObjectNode promotionJson(Promotion item) {
         ObjectNode result = JSON.createObjectNode().put("promotionId", item.promotionId().toString())
             .put("name", item.name()).put("percentOffBps", item.percentOffBps())
             .put("startsAt", item.startsAt().toString()).put("endsAt", item.endsAt().toString()).put("status", item.status());
         putNullable(result, "targetTierKey", item.targetTierKey());
+        putNullable(result, "discountCode", item.discountCode());
+        if (item.discountCode() != null) {
+            result.put("exhausted",item.status().equals("EXHAUSTED")); result.put("maxUsesPerPlayer",item.maxUsesPerPlayer()); result.put("maxPlayers",item.maxPlayers()); result.put("usedPlayers",item.usedPlayers());
+            Instant now = Instant.now();
+            result.put("status", !item.status().equals("ACTIVE") || !item.endsAt().isAfter(now) || item.maxPlayers()!=null && item.usedPlayers()>=item.maxPlayers() ? "EXPIRED" : item.startsAt().isAfter(now) ? "SCHEDULED" : "ACTIVE");
+            if (item.endsAt().equals(Instant.parse("9999-12-31T00:00:00Z"))) result.putNull("endsAt");
+        }
         return result;
     }
 
@@ -254,6 +302,59 @@ final class PaperAdminRpcModule implements CctModule {
         ));
     }
 
+    private CompletionStage<JsonNode> listChatFilterIncidents(BridgeRpcCall call) {
+        JsonNode payload = objectPayload(call);
+        requireStaff(payload);
+        int page = integer(payload, "page", 1, 100_000);
+        int pageSize = integer(payload, "pageSize", 1, 100);
+        String search = optionalText(payload, "query", 200, "");
+        String server = optionalText(payload, "server", 64, "");
+        String word = optionalText(payload, "word", 200, "");
+        String from = optionalText(payload, "from", 40, "");
+        String to = optionalText(payload, "to", 40, "");
+        List<Object> args = new ArrayList<>();
+        StringBuilder where = new StringBuilder(" WHERE 1=1");
+        if (!search.isEmpty()) { where.append(" AND (LOCATE(?,player_name)>0 OR LOCATE(?,original_text)>0)"); args.add(search); args.add(search); }
+        if (!server.isEmpty()) { where.append(" AND server_id=?"); args.add(server); }
+        if (!word.isEmpty()) { where.append(" AND LOCATE(?,CAST(matched_words AS CHAR))>0"); args.add(word); }
+        try {
+            if (!from.isEmpty()) { where.append(" AND detected_at>=?"); args.add(cn.cctstudio.cctsystem.storage.mysql.BeijingDateTime.fromInstant(Instant.parse(from))); }
+            if (!to.isEmpty()) { where.append(" AND detected_at<=?"); args.add(cn.cctstudio.cctsystem.storage.mysql.BeijingDateTime.fromInstant(Instant.parse(to))); }
+        } catch (java.time.format.DateTimeParseException failure) { throw invalid("Invalid chat filter date"); }
+        return databaseTask(database -> {
+            try (Connection connection = database.connection()) {
+                long total;
+                try (PreparedStatement count = connection.prepareStatement("SELECT COUNT(*) FROM cct_chat_filter_incidents" + where)) {
+                    for (int i = 0; i < args.size(); i++) count.setObject(i + 1, args.get(i));
+                    try (ResultSet rows = count.executeQuery()) { rows.next(); total = rows.getLong(1); }
+                }
+                ObjectNode root = pageRoot(page, pageSize, total);
+                ArrayNode items = root.putArray("items");
+                try (PreparedStatement query = connection.prepareStatement("SELECT * FROM cct_chat_filter_incidents" + where + " ORDER BY detected_at DESC, incident_id DESC LIMIT ? OFFSET ?")) {
+                    for (int i = 0; i < args.size(); i++) query.setObject(i + 1, args.get(i));
+                    query.setInt(args.size() + 1, pageSize);
+                    query.setInt(args.size() + 2, (page - 1) * pageSize);
+                    try (ResultSet rows = query.executeQuery()) {
+                        while (rows.next()) {
+                            ObjectNode item = items.addObject();
+                            item.put("incidentId", UuidBinary.decode(rows.getBytes("incident_id")).toString());
+                            item.put("playerUuid", UuidBinary.decode(rows.getBytes("player_uuid")).toString());
+                            item.put("playerName", rows.getString("player_name"));
+                            item.put("serverId", rows.getString("server_id"));
+                            item.put("sourceType", rows.getString("source_type"));
+                            item.put("originalText", rows.getString("original_text"));
+                            item.put("filteredText", rows.getString("filtered_text"));
+                            try { item.set("matchedWords", JSON.readTree(rows.getString("matched_words"))); }
+                            catch (IOException failure) { item.putArray("matchedWords"); }
+                            putBeijingInstant(item, "detectedAt", rows, "detected_at");
+                        }
+                    }
+                }
+                return root;
+            }
+        });
+    }
+
     private CompletionStage<JsonNode> listRegisteredPlayers(BridgeRpcCall call) {
         JsonNode payload = objectPayload(call);
         requireStaff(payload);
@@ -265,6 +366,27 @@ final class PaperAdminRpcModule implements CctModule {
         }
         return databaseTask(database -> registeredPlayers(database, page, pageSize, query))
             .thenCompose(this::enrichPlayerGroups);
+    }
+
+    private CompletionStage<JsonNode> playerDetail(BridgeRpcCall call) {
+        JsonNode payload = objectPayload(call);
+        requireStaff(payload);
+        UUID playerUuid = uuid(payload, "playerUuid");
+        String playerName = text(payload, "playerName", 64);
+        return databaseTask(database -> {
+            ObjectNode root = registeredPlayers(database, 1, 1, playerUuid.toString());
+            ArrayNode items = (ArrayNode) root.path("items");
+            if (items.isEmpty()) {
+                ObjectNode item = items.addObject();
+                item.put("playerUuid", playerUuid.toString());
+                item.put("playerName", playerName);
+                item.put("online", false);
+                item.putNull("serverId");
+                for (String key : List.of("registeredAt", "lastSeenAt", "membershipTier", "membershipExpiresAt",
+                    "lastLoginIp", "lastLoginLocation")) item.putNull(key);
+            }
+            return root;
+        }).thenCompose(this::enrichPlayerGroups).thenApply(root -> root.path("items").get(0));
     }
 
     private CompletionStage<JsonNode> mutatePlayerMembership(BridgeRpcCall call) {
@@ -404,11 +526,11 @@ final class PaperAdminRpcModule implements CctModule {
                     item.put("codeCount", result.getInt("code_count"));
                     item.put("codeLength", result.getInt("code_length"));
                     item.put("maxUsesPerCode", result.getInt("max_uses_per_code"));
-                    putInstant(item, "validFrom", result, "valid_from");
-                    putInstant(item, "validUntil", result, "valid_until");
+                    putBeijingInstant(item, "validFrom", result, "valid_from");
+                    putBeijingInstant(item, "validUntil", result, "valid_until");
                     item.put("creator", result.getString("creator"));
                     item.put("note", result.getString("note"));
-                    putInstant(item, "createdAt", result, "created_at");
+                    putBeijingInstant(item, "createdAt", result, "created_at");
                     item.put("usedUses", result.getLong("used_uses"));
                     item.put("maxUses", result.getLong("max_uses"));
                 }
@@ -442,8 +564,8 @@ final class PaperAdminRpcModule implements CctModule {
                     item.put("origin", result.getString("origin"));
                     item.put("state", result.getString("state"));
                     putNullable(item, "errorCode", result.getString("error_code"));
-                    putInstant(item, "createdAt", result, "created_at");
-                    putInstant(item, "updatedAt", result, "updated_at");
+                    putBeijingInstant(item, "createdAt", result, "created_at");
+                    putBeijingInstant(item, "updatedAt", result, "updated_at");
                 }
             }
         }
@@ -640,8 +762,8 @@ final class PaperAdminRpcModule implements CctModule {
                     item.put("playerName", result.getString("current_name"));
                     item.put("online", false);
                     item.putNull("serverId");
-                    putInstant(item, "registeredAt", result, "first_seen_at");
-                    putInstant(item, "lastSeenAt", result, "last_seen_at");
+                    putBeijingInstant(item, "registeredAt", result, "first_seen_at");
+                    putBeijingInstant(item, "lastSeenAt", result, "last_seen_at");
                     putNullable(item, "membershipTier", result.getString("membership_tier"));
                     putInstant(item, "membershipExpiresAt", result, "membership_expires_at");
                     item.put("group", result.getString("primary_group") == null
@@ -868,6 +990,13 @@ final class PaperAdminRpcModule implements CctModule {
             result.next();
             return result.getLong(1);
         }
+    }
+
+    private static void putBeijingInstant(ObjectNode target, String field, ResultSet source, String column)
+        throws SQLException {
+        LocalDateTime value = source.getObject(column, LocalDateTime.class);
+        if (value == null) target.putNull(field);
+        else target.put(field, cn.cctstudio.cctsystem.storage.mysql.BeijingDateTime.toInstant(value).toString());
     }
 
     private static void putInstant(ObjectNode target, String field, ResultSet source, String column)

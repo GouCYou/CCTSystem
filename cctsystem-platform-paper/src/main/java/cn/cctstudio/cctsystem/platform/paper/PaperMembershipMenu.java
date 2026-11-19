@@ -140,6 +140,7 @@ final class PaperMembershipMenu implements Listener {
 
     @EventHandler
     public void onInventoryClick(InventoryClickEvent event) {
+        if (handleDiscountAnvilClick(event)) return;
         InventoryHolder holder = event.getInventory().getHolder(false);
         if (!(holder instanceof PersonalHolder
             || holder instanceof MembershipHolder
@@ -162,6 +163,9 @@ final class PaperMembershipMenu implements Listener {
             return;
         }
         if (holder instanceof MembershipHolder memberships) {
+            if(slot==memberships.inventory.getSize()-1) {
+                plugin.getServer().getScheduler().runTask(plugin,() -> openDiscountAnvil(player,memberships)); return;
+            }
             String action = memberships.layout.actionAt(slot);
             if ("OPEN_PERSONAL".equals(action)) {
                 openPersonal(player);
@@ -180,16 +184,16 @@ final class PaperMembershipMenu implements Listener {
             MembershipEntitlement active = memberships.summary == null
                 ? null : memberships.summary.active();
             if (active != null && view.tier().priority() > active.tier().priority()) {
-                openUpgradeChoice(player, view.tier());
+                openUpgradeChoice(player, view.tier(), memberships.discountCode);
             } else {
-                openConfirmation(player, view.quote());
+                quoteAndConfirm(player,view.tier().key(),UpgradeMode.NONE,memberships.discountCode);
             }
             return;
         }
         if (holder instanceof UpgradeHolder upgrade) {
             switch (upgrade.layout.actionAt(slot)) {
-                case "UPGRADE_PAUSE" -> quoteAndConfirm(player, upgrade.tierKey, UpgradeMode.PAUSE);
-                case "UPGRADE_CREDIT" -> quoteAndConfirm(player, upgrade.tierKey, UpgradeMode.CREDIT);
+                case "UPGRADE_PAUSE" -> quoteAndConfirm(player, upgrade.tierKey, UpgradeMode.PAUSE,upgrade.discountCode);
+                case "UPGRADE_CREDIT" -> quoteAndConfirm(player, upgrade.tierKey, UpgradeMode.CREDIT,upgrade.discountCode);
                 case "OPEN_MEMBERSHIP" -> openMemberships(player);
                 default -> { }
             }
@@ -211,6 +215,8 @@ final class PaperMembershipMenu implements Listener {
 
     @EventHandler
     public void onInventoryDrag(InventoryDragEvent event) {
+        DiscountAnvil anvil=discountAnvils.get(event.getWhoClicked().getUniqueId());
+        if(anvil!=null && anvil.view==event.getView()) { event.setCancelled(true); return; }
         InventoryHolder holder = event.getInventory().getHolder(false);
         if (holder instanceof PersonalHolder
             || holder instanceof MembershipHolder
@@ -248,6 +254,7 @@ final class PaperMembershipMenu implements Listener {
 
     private void refreshMembership(Player player, MembershipHolder holder, Services services) {
         UUID uuid = player.getUniqueId();
+        int revision=holder.discountRevision;
         CompletableFuture<MembershipData> load = membershipLoads.computeIfAbsent(uuid, ignored -> {
             CompletableFuture<MembershipMenuSnapshot> snapshot =
                 services.memberships().menu(uuid).toCompletableFuture();
@@ -265,6 +272,7 @@ final class PaperMembershipMenu implements Listener {
                 }
                 return;
             }
+            if(holder.discountRevision!=revision) return;
             MembershipMenuSnapshot value = data.snapshot();
             holder.summary = value.summary();
             holder.points = data.points();
@@ -318,7 +326,7 @@ final class PaperMembershipMenu implements Listener {
             );
             if (purchase != null) {
                 holder.tiersBySlot.put(purchase.slot(), view);
-                inventory.setItem(purchase.slot(), tierItem(view, holder.summary, purchase));
+                inventory.setItem(purchase.slot(), tierItem(view, holder.summary, purchase,holder.discountCode!=null));
             }
             PaperMenus.MenuItemDefinition benefits = findItem(
                 holder.layout, "VIEW_BENEFITS", view.tier().key()
@@ -327,6 +335,8 @@ final class PaperMembershipMenu implements Listener {
                 inventory.setItem(benefits.slot(), benefitsBook(view.tier(), benefits));
             }
         }
+        inventory.setItem(inventory.getSize()-1,item(Material.NAME_TAG,messages.component("discount-code.title"),
+            holder.discountCode==null ? List.of() : List.of(Component.text(holder.discountCode))));
         putConfigured(inventory, holder.layout.item("back"),
             messages.component("menus.membership.back-name"), List.of(), Material.ARROW);
     }
@@ -366,7 +376,7 @@ final class PaperMembershipMenu implements Listener {
     private ItemStack tierItem(
         MembershipMenuTier view,
         MembershipSummary summary,
-        PaperMenus.MenuItemDefinition definition
+        PaperMenus.MenuItemDefinition definition, boolean hideCodeDetails
     ) {
         MembershipTier tier = view.tier();
         Material material = Material.matchMaterial(tier.displayMaterial());
@@ -383,7 +393,7 @@ final class PaperMembershipMenu implements Listener {
             lore.add(messages.component("menus.membership.duration", Map.of(
                 "days", tier.durationDays()
             )));
-            if (view.quote().promotionEndsAt() != null) {
+            if (!hideCodeDetails && view.quote().promotionEndsAt() != null) {
                 lore.add(messages.component("menus.membership.promotion-left", Map.of(
                     "time", countdown(view.quote().promotionEndsAt())
                 )));
@@ -448,9 +458,9 @@ final class PaperMembershipMenu implements Listener {
         ));
     }
 
-    private void openUpgradeChoice(Player player, MembershipTier tier) {
+    private void openUpgradeChoice(Player player, MembershipTier tier, String discountCode) {
         PaperMenus.MenuDefinition layout = menus.get("upgrade");
-        UpgradeHolder holder = new UpgradeHolder(tier.key(), layout);
+        UpgradeHolder holder = new UpgradeHolder(tier.key(), layout, discountCode);
         holder.inventory = plugin.getServer().createInventory(
             holder, layout.size(), messages.component(layout.titleKey())
         );
@@ -466,7 +476,7 @@ final class PaperMembershipMenu implements Listener {
         player.openInventory(holder.inventory);
     }
 
-    private void quoteAndConfirm(Player player, String tierKey, UpgradeMode mode) {
+    private void quoteAndConfirm(Player player, String tierKey, UpgradeMode mode,String discountCode) {
         Services services = services(player);
         if (services == null) return;
         PaperMenus.MenuDefinition layout = menus.get("confirmation");
@@ -476,9 +486,10 @@ final class PaperMembershipMenu implements Listener {
         holder.inventory = plugin.getServer().createInventory(
             holder, layout.size(), messages.component(layout.titleKey())
         );
+        holder.discountCode=discountCode;
         renderConfirmation(holder);
         player.openInventory(holder.inventory);
-        services.memberships().quote(player.getUniqueId(), tierKey, 1, mode)
+        services.memberships().quote(player.getUniqueId(), tierKey, 1, mode,discountCode)
             .whenComplete((quote, failure) -> main(() -> {
                 if (!ready(player)) return;
                 if (failure != null) {
@@ -496,11 +507,12 @@ final class PaperMembershipMenu implements Listener {
             }));
     }
 
-    private void openConfirmation(Player player, MembershipQuote quote) {
+    private void openConfirmation(Player player, MembershipQuote quote,String discountCode) {
         PaperMenus.MenuDefinition layout = menus.get("confirmation");
         ConfirmHolder holder = new ConfirmHolder(
             quote, "menu-" + UUID.randomUUID(), layout
         );
+        holder.discountCode=discountCode;
         holder.inventory = plugin.getServer().createInventory(
             holder, layout.size(), messages.component(layout.titleKey())
         );
@@ -552,7 +564,7 @@ final class PaperMembershipMenu implements Listener {
         MembershipQuote quote = holder.quote;
         services.memberships().purchase(new MembershipPurchaseRequest(
             player.getUniqueId(), quote.targetTier().key(), quote.months(),
-            quote.upgradeMode(), holder.idempotencyKey, "MENU"
+            quote.upgradeMode(), holder.idempotencyKey, "MENU", holder.discountCode
         )).whenComplete((order, failure) -> main(() -> {
             inFlight.remove(player.getUniqueId());
             if (!ready(player)) return;
@@ -605,12 +617,7 @@ final class PaperMembershipMenu implements Listener {
     }
 
     private void logFailure(String message, Throwable failure) {
-        Throwable cause = unwrap(failure);
-        if (cause instanceof MembershipException membership) {
-            logger.warn(message + ": " + membership.code());
-        } else {
-            logger.warn(message, failure);
-        }
+        cn.cctstudio.cctsystem.membership.MembershipFailures.log(logger, message, failure);
     }
 
     private ItemStack playerHead(Player player, List<Component> lore) {
@@ -719,6 +726,7 @@ final class PaperMembershipMenu implements Listener {
     }
 
     private static String errorPath(String code) {
+        if ("DISCOUNT_CODE_UNAVAILABLE".equals(code) || "DISCOUNT_CODE_LIMIT_REACHED".equals(code)) return "discount-code.invalid";
         return switch (code == null ? "" : code) {
             case "MEMBERSHIP_DOWNGRADE_FORBIDDEN" -> "menus.errors.downgrade";
             case "MEMBERSHIP_UPGRADE_MODE_REQUIRED" -> "menus.errors.upgrade-mode-required";
@@ -804,6 +812,8 @@ final class PaperMembershipMenu implements Listener {
 
     private static final class MembershipHolder implements InventoryHolder {
         private MembershipSummary summary;
+        private String discountCode;
+        private int discountRevision;
         private Integer points;
         private List<MembershipMenuTier> tiers;
         private final PaperMenus.MenuDefinition layout;
@@ -833,7 +843,9 @@ final class PaperMembershipMenu implements Listener {
         private final PaperMenus.MenuDefinition layout;
         private Inventory inventory;
 
-        private UpgradeHolder(String tierKey, PaperMenus.MenuDefinition layout) {
+        private final String discountCode;
+        private UpgradeHolder(String tierKey, PaperMenus.MenuDefinition layout,String discountCode) {
+            this.discountCode=discountCode;
             this.tierKey = tierKey;
             this.layout = layout;
         }
@@ -844,9 +856,88 @@ final class PaperMembershipMenu implements Listener {
         }
     }
 
+    private final Map<UUID, DiscountAnvil> discountAnvils = new HashMap<>();
+    private static final class DiscountAnvil {
+        final MembershipHolder holder;
+        final org.bukkit.inventory.view.AnvilView view;
+        boolean applying;
+        DiscountAnvil(MembershipHolder holder, org.bukkit.inventory.view.AnvilView view) { this.holder=holder; this.view=view; }
+    }
+
+    private void openDiscountAnvil(Player player, MembershipHolder holder) {
+        if (!ready(player) || holder.summary==null || inFlight.contains(player.getUniqueId())
+            || player.getOpenInventory().getTopInventory()!=holder.inventory) return;
+        var view=org.bukkit.inventory.MenuType.ANVIL.builder().title(messages.component("discount-code.title"))
+            .checkReachable(false).build(player);
+        var session=new DiscountAnvil(holder,view);
+        discountAnvils.put(player.getUniqueId(),session);
+        view.open();
+        if (player.getOpenInventory()!=view) { discountAnvils.remove(player.getUniqueId()); view.getTopInventory().clear(); return; }
+        view.getTopInventory().setItem(0,item(Material.NAME_TAG,Component.text(holder.discountCode==null ? "" : holder.discountCode),List.of()));
+        view.setRepairCost(0); view.setRepairItemCountCost(0); view.setMaximumRepairCost(Integer.MAX_VALUE);
+        view.getTopInventory().setItem(2,item(Material.NAME_TAG,messages.component("discount-code.apply"),List.of()));
+    }
+
+    @EventHandler
+    public void onDiscountAnvilPrepare(org.bukkit.event.inventory.PrepareAnvilEvent event) {
+        DiscountAnvil session=discountAnvils.get(event.getView().getPlayer().getUniqueId());
+        if (session==null || session.view!=event.getView()) return;
+        event.setResult(item(Material.NAME_TAG,messages.component(session.applying ? "discount-code.applying" : "discount-code.apply"),List.of()));
+        event.getView().setRepairCost(0); event.getView().setRepairItemCountCost(0);
+        plugin.getServer().getScheduler().runTask(plugin,() -> {
+            if(discountAnvils.get(event.getView().getPlayer().getUniqueId())==session) session.view.setRepairCost(0);
+        });
+    }
+
+    private boolean handleDiscountAnvilClick(InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player)) return false;
+        DiscountAnvil session=discountAnvils.get(player.getUniqueId());
+        if(session==null || session.view!=event.getView()) return false;
+        event.setCancelled(true);
+        if(event.getRawSlot()!=2 || session.applying) return true;
+        String input=session.view.getRenameText();
+        String code=input==null ? "" : java.text.Normalizer.normalize(input.trim(),java.text.Normalizer.Form.NFC);
+        if(!code.isEmpty() && !code.matches("[\\p{L}\\p{N}_-]{1,32}")) {
+            player.sendMessage(messages.component("discount-code.invalid")); return true;
+        }
+        Services services=services(player); if(services==null) return true;
+        session.applying=true;
+        session.view.getTopInventory().setItem(2,item(Material.CLOCK,messages.component("discount-code.applying"),List.of()));
+        session.holder.discountRevision++;
+        services.memberships().menu(player.getUniqueId(),code.isEmpty() ? null : code)
+            .whenComplete((quote,failure) -> main(() -> {
+                if(!ready(player) || discountAnvils.get(player.getUniqueId())!=session || player.getOpenInventory()!=session.view) return;
+                session.applying=false;
+                if(failure!=null) {
+                    player.sendMessage(messages.component(errorPath(failure)));
+                    session.view.getTopInventory().setItem(2,item(Material.NAME_TAG,messages.component("discount-code.apply"),List.of()));
+                    session.view.setRepairCost(0); return;
+                }
+                session.holder.summary=quote.summary(); session.holder.tiers=quote.tiers(); session.holder.discountCode=code.isEmpty() ? null : code;
+                session.view.getTopInventory().clear(); discountAnvils.remove(player.getUniqueId());
+                renderMembership(player,session.holder); player.openInventory(session.holder.inventory);
+            }));
+        return true;
+    }
+
+    @EventHandler
+    public void onDiscountAnvilClose(org.bukkit.event.inventory.InventoryCloseEvent event) {
+        DiscountAnvil session=discountAnvils.get(event.getPlayer().getUniqueId());
+        if(session!=null && session.view==event.getView()) {
+            event.getInventory().clear(); discountAnvils.remove(event.getPlayer().getUniqueId());
+        }
+    }
+
+    @EventHandler
+    public void onDiscountQuit(org.bukkit.event.player.PlayerQuitEvent event) {
+        DiscountAnvil session=discountAnvils.remove(event.getPlayer().getUniqueId());
+        if(session!=null) session.view.getTopInventory().clear();
+    }
+
     private static final class ConfirmHolder implements InventoryHolder {
         private MembershipQuote quote;
-        private final String idempotencyKey;
+        private String discountCode;
+        private String idempotencyKey;
         private final PaperMenus.MenuDefinition layout;
         private Inventory inventory;
 

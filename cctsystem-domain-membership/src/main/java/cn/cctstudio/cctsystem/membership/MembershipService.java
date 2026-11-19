@@ -17,12 +17,24 @@ public interface MembershipService {
         ));
     }
 
+    default CompletionStage<MembershipMenuSnapshot> menu(UUID playerUuid, String discountCode) {
+        if (discountCode!=null && !discountCode.isBlank()) return java.util.concurrent.CompletableFuture.failedFuture(
+            new MembershipException("DISCOUNT_CODE_UNAVAILABLE","Discount code unavailable",false));
+        return menu(playerUuid);
+    }
+
     CompletionStage<MembershipQuote> quote(
         UUID playerUuid,
         String tierKey,
         int months,
         UpgradeMode upgradeMode
     );
+
+    default CompletionStage<MembershipQuote> quote(UUID playerUuid, String tierKey, int months, UpgradeMode mode, String code) {
+        if (code != null && !code.isBlank()) return java.util.concurrent.CompletableFuture.failedFuture(
+            new MembershipException("DISCOUNT_CODE_UNAVAILABLE", "Discount code unavailable", false));
+        return quote(playerUuid,tierKey,months,mode);
+    }
 
     CompletionStage<MembershipOrderResult> purchase(MembershipPurchaseRequest request);
 

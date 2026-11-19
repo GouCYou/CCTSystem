@@ -18,7 +18,11 @@ final class PaperMessages {
     private volatile YamlConfiguration messages;
 
     PaperMessages(JavaPlugin plugin) {
-        this.file = new File(plugin.getDataFolder(), "messages.yml");
+        this(new File(plugin.getDataFolder(), "messages.yml"));
+    }
+
+    PaperMessages(File file) {
+        this.file = file;
         reload();
     }
 
@@ -55,11 +59,13 @@ final class PaperMessages {
     }
 
     String raw(String path) {
-        return messages.getString(path, "&cMissing message: " + path);
+        return raw(path, "&cMissing message: " + path);
     }
 
     String raw(String path, String fallback) {
-        return messages.getString(path, fallback);
+        // The overload accepting an explicit fallback bypasses Bukkit configuration defaults.
+        String configured = messages.getString(path);
+        return configured == null ? fallback : configured;
     }
 
     private static String replace(String source, Map<String, ?> placeholders) {

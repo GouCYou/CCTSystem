@@ -4,6 +4,7 @@ import cn.cctstudio.cctsystem.core.logging.CctLogger;
 import cn.cctstudio.cctsystem.core.provider.ProviderRegistry;
 import cn.cctstudio.cctsystem.identity.IdentityProvider;
 import cn.cctstudio.cctsystem.membership.MembershipServiceProvider;
+import cn.cctstudio.cctsystem.membership.MembershipFailures;
 import java.time.Instant;
 import java.util.UUID;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -34,14 +35,24 @@ final class PaperIdentityListener implements Listener {
             logger.warn("Unable to update joined player identity", throwable);
             return null;
         }));
-        plugin.getServer().getScheduler().runTaskLater(plugin, () ->
+        reconcileJoinedPlayer(playerUuid, 0, 20L);
+    }
+
+    private void reconcileJoinedPlayer(UUID playerUuid, int attempt, long delayTicks) {
+        plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+            var player = plugin.getServer().getPlayer(playerUuid);
+            if (player == null || !player.isOnline()) return;
             providers.find(MembershipServiceProvider.KEY).ifPresent(memberships ->
-                memberships.summary(playerUuid).exceptionally(throwable -> {
-                    logger.warn("Unable to reconcile joined player membership access", throwable);
-                    return null;
+                memberships.summary(playerUuid).whenComplete((summary, failure) -> {
+                    if (failure == null) return;
+                    if (MembershipFailures.temporaryTransport(failure) && attempt < 2) {
+                        // Only retry the read/reconcile operation, never purchases or debits.
+                        if (plugin.isEnabled()) reconcileJoinedPlayer(playerUuid, attempt + 1, 100L * (attempt + 1));
+                        return;
+                    }
+                    MembershipFailures.log(logger, "Joined player membership check for " + playerUuid, failure);
                 })
-            ),
-            20L
-        );
+            );
+        }, delayTicks);
     }
 }
