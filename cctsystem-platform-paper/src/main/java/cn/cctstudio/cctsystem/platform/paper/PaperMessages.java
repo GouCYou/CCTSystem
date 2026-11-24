@@ -7,6 +7,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -46,6 +48,15 @@ final class PaperMessages {
 
     Component component(String path, Map<String, ?> placeholders) {
         return LEGACY.deserialize(replace(raw(path), placeholders));
+    }
+
+    Component chat(String path) {
+        return chat(path, Map.of());
+    }
+
+    Component chat(String path, Map<String, ?> placeholders) {
+        return Component.text(PlainTextComponentSerializer.plainText().serialize(component(path, placeholders)),
+            NamedTextColor.GREEN);
     }
 
     List<Component> components(String path) {

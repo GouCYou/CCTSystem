@@ -219,7 +219,7 @@ final class PaperRewardsMenu implements Listener {
             if (failure != null) {
                 finishClaim(player, holder, reservation);
                 logger.warn("Unable to reserve reward " + reward.key(), unwrap(failure));
-                player.sendMessage(messages.component("rewards.failed"));
+                player.sendMessage(messages.chat("rewards.failed"));
                 return;
             }
             if (!reserved.accepted()) {
@@ -240,10 +240,10 @@ final class PaperRewardsMenu implements Listener {
                     if (completionFailure != null) logger.warn(
                         "Unable to finalize reward " + reward.key(), unwrap(completionFailure)
                     );
-                    player.sendMessage(messages.component(delivered
+                    player.sendMessage(messages.chat(delivered
                         ? "rewards.failed" : "rewards.provider-unavailable"));
                 } else {
-                    player.sendMessage(messages.component("rewards.completed"));
+                    player.sendMessage(messages.chat("rewards.completed"));
                 }
                 refresh(player, holder);
             }));

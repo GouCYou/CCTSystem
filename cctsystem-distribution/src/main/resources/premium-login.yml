@@ -1,0 +1,28 @@
+# 在 Velocity、登录服和大厅启用。玩家继续使用原来的服务器地址。
+enabled: false
+# 开启后，玩家须先绑定 QQ 或 Discord 才能绑定正版。
+require-social-binding: false
+# 使用 openssl rand -hex 32 生成。参与认证的实例填写相同值。
+signing-key: ""
+login-server: "login"
+# CCTSystem server-id。奖励服需同时有 business-authority 和 points-authority 角色。
+reward-server: "lobby"
+title-server: "lobby"
+
+titles:
+  enabled: true
+  show-returning: true
+  title: "&a&l正版身份验证成功"
+  first-subtitle: "&6感谢支持 Minecraft 正版，专属奖励已发放！"
+  returning-subtitle: "&6欢迎回来，感谢支持 Minecraft 正版！"
+  pending-subtitle: "&e正版身份已验证，奖励正在处理。"
+  fade-in-ticks: 10
+  stay-ticks: 65
+  fade-out-ticks: 15
+
+rewards:
+  membership-tier: "vip_plus"
+  membership-days: 14
+  points: 50
+  # 0 表示关闭对应奖励。命令由奖励服控制台执行，支持 {player} 和 {uuid}。
+  commands: []

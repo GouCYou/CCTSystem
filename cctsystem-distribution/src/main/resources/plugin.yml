@@ -6,6 +6,9 @@ load: POSTWORLD
 authors: [GouC]
 description: CCTStudio unified network core
 commands:
+  mail:
+    description: 在聊天栏查看邮件
+    usage: /mail [claimall]
   cct:
     description: CCTSystem player menu
     usage: /cct help

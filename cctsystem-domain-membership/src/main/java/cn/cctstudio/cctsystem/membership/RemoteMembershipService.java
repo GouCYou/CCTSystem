@@ -123,9 +123,10 @@ final class RemoteMembershipService implements MembershipService {
                     try {
                         result.complete(parser.apply(response));
                     } catch (RuntimeException invalidResponse) {
-                        result.completeExceptionally(new MembershipException(
-                            "MEMBERSHIP_RESPONSE_INVALID", "Invalid membership response", true
-                        ));
+                        result.completeExceptionally(invalidResponse instanceof MembershipException
+                            ? invalidResponse : new MembershipException(
+                                "MEMBERSHIP_RESPONSE_INVALID", "Invalid membership response", true
+                            ));
                     }
                     return;
                 }

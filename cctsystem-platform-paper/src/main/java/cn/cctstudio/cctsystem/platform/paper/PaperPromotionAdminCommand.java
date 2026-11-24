@@ -49,6 +49,8 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
     private final PaperMenus menus;
     private final PaperTitleService titles;
 
+    private final PaperMailbox mailbox;
+
     PaperPromotionAdminCommand(
         ProviderRegistry providers,
         PlatformTaskExecutor platformTasks,
@@ -56,7 +58,8 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         CctLogger logger,
         PaperMessages messages,
         PaperMenus menus,
-        PaperTitleService titles
+        PaperTitleService titles,
+        PaperMailbox mailbox
     ) {
         this.config = config;
         this.providers = providers;
@@ -66,12 +69,13 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         this.messages = messages;
         this.menus = menus;
         this.titles = titles;
+        this.mailbox = mailbox;
     }
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!sender.hasPermission("cctsystem.admin")) {
-            sender.sendMessage(messages.component("commands.no-permission"));
+            sender.sendMessage(messages.chat("commands.no-permission"));
             return true;
         }
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
@@ -82,11 +86,15 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
             try {
                 messages.reload();
                 menus.reload();
-                sender.sendMessage(messages.component("commands.reloaded"));
+                sender.sendMessage(messages.chat("commands.reloaded"));
             } catch (RuntimeException exception) {
                 logger.warn("Unable to reload menu configuration", exception);
-                sender.sendMessage(messages.component("commands.reload-failed"));
+                sender.sendMessage(messages.chat("commands.reload-failed"));
             }
+            return true;
+        }
+        if (args.length >= 1 && args[0].equalsIgnoreCase("mail")) {
+            mailbox.admin(sender, args);
             return true;
         }
         if (args.length >= 1 && args[0].equalsIgnoreCase("discountcode")) {
@@ -111,7 +119,7 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         }
         PromotionService service = providers.find(PromotionServiceProvider.KEY).orElse(null);
         if (service == null) {
-            sender.sendMessage(messages.component("admin.promotion-service-unavailable"));
+            sender.sendMessage(messages.chat("admin.promotion-service-unavailable"));
             return true;
         }
         try {
@@ -123,7 +131,7 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
                 default -> usage(sender);
             }
         } catch (IllegalArgumentException | DateTimeParseException exception) {
-            sender.sendMessage(messages.component("commands.invalid-arguments"));
+            sender.sendMessage(messages.chat("commands.invalid-arguments"));
             usage(sender);
         }
         return true;
@@ -131,21 +139,21 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
 
     private void discountCode(CommandSender sender, String[] args) {
         PromotionService service = providers.find(PromotionServiceProvider.KEY).orElse(null);
-        if (service == null) { sender.sendMessage(messages.component("admin.promotion-service-unavailable")); return; }
+        if (service == null) { sender.sendMessage(messages.chat("admin.promotion-service-unavailable")); return; }
         try {
             String action = args.length > 1 ? args[1].toLowerCase(java.util.Locale.ROOT) : "help";
             if (action.equals("list")) {
                 service.listCodes(Instant.now()).whenComplete((items,failure) -> main(() -> {
-                    if (failure != null) { sender.sendMessage(messages.component("discount-code.failed")); return; }
-                    if (items.isEmpty()) sender.sendMessage(messages.component("discount-code.empty"));
-                    for (Promotion p : items) sender.sendMessage(messages.component("discount-code.entry",Map.of(
+                    if (failure != null) { sender.sendMessage(messages.chat("discount-code.failed")); return; }
+                    if (items.isEmpty()) sender.sendMessage(messages.chat("discount-code.empty"));
+                    for (Promotion p : items) sender.sendMessage(messages.chat("discount-code.entry",Map.of(
                         "id",p.promotionId(),"code",p.discountCode(),"off",p.percentOffBps()/100.0,
                         "state",!p.status().equals("ACTIVE") || !p.endsAt().isAfter(Instant.now()) ? "已失效" : p.startsAt().isAfter(Instant.now()) ? "未开始" : "生效中")));
                 })); return;
             }
             if (action.equals("delete") && args.length == 3) {
                 service.deleteCode(UUID.fromString(args[2])).whenComplete((deleted,failure) -> main(() ->
-                    sender.sendMessage(messages.component(failure == null && deleted ? "discount-code.deleted" : "discount-code.failed")))); return;
+                    sender.sendMessage(messages.chat(failure == null && deleted ? "discount-code.deleted" : "discount-code.failed")))); return;
             }
             boolean update = action.equals("edit"); int offset = update ? 1 : 0;
             if (!(action.equals("create") || update) || args.length < 7+offset) throw new IllegalArgumentException();
@@ -160,14 +168,14 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
             (update ? service.updateCode(UUID.fromString(args[2]),request) : service.create(request)).whenComplete((p,failure) -> main(() ->
                 sender.sendMessage(failure == null ? messages.component("discount-code.saved",Map.of("code",p.discountCode(),"id",p.promotionId())) : messages.component("discount-code.failed"))));
         } catch (IllegalArgumentException failure) {
-            sender.sendMessage(messages.component("discount-code.usage"));
+            sender.sendMessage(messages.chat("discount-code.usage"));
         }
     }
 
     private void redeem(CommandSender sender, String[] args) {
         RedeemCodeService service = providers.find(RedeemCodeServiceProvider.KEY).orElse(null);
         if (service == null) {
-            sender.sendMessage(messages.component("admin.redeem-service-unavailable"));
+            sender.sendMessage(messages.chat("admin.redeem-service-unavailable"));
             return;
         }
         if (args.length < 7 || !args[1].equalsIgnoreCase("generate")) {
@@ -206,16 +214,16 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
             )).whenComplete((batch, failure) -> main(() -> {
                 if (failure != null) {
                     logger.warn("Unable to generate redeem codes", failure);
-                    sender.sendMessage(messages.component("admin.redeem-generate-failed"));
+                    sender.sendMessage(messages.chat("admin.redeem-generate-failed"));
                     return;
                 }
-                sender.sendMessage(messages.component("admin.redeem-generated", Map.of(
+                sender.sendMessage(messages.chat("admin.redeem-generated", Map.of(
                     "count", batch.codes().size()
                 )));
-                batch.codes().forEach(code -> sender.sendMessage(messages.component(
+                batch.codes().forEach(code -> sender.sendMessage(messages.chat(
                     "admin.redeem-code", Map.of("code", code)
                 )));
-                sender.sendMessage(messages.component("admin.redeem-save-now"));
+                sender.sendMessage(messages.chat("admin.redeem-save-now"));
             }));
         } catch (IllegalArgumentException exception) {
             redeemUsage(sender);
@@ -237,7 +245,7 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         IdentityService identities = providers.find(IdentityProvider.KEY).orElse(null);
         MembershipService memberships = providers.find(MembershipServiceProvider.KEY).orElse(null);
         if (identities == null || memberships == null) {
-            sender.sendMessage(messages.component("admin.membership-service-unavailable"));
+            sender.sendMessage(messages.chat("admin.membership-service-unavailable"));
             return;
         }
         String action = args[1].toLowerCase(java.util.Locale.ROOT);
@@ -248,7 +256,7 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         String playerName = args[2];
         identities.findByName(playerName).whenComplete((identity, identityFailure) -> {
             if (identityFailure != null || identity.isEmpty()) {
-                main(() -> sender.sendMessage(messages.component("admin.player-not-found")));
+                main(() -> sender.sendMessage(messages.chat("admin.player-not-found")));
                 return;
             }
             try {
@@ -357,27 +365,27 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         main(() -> {
             if (failure != null) {
                 logger.warn("Membership admin operation failed", failure);
-                sender.sendMessage(messages.component("admin.member-operation-failed"));
+                sender.sendMessage(messages.chat("admin.member-operation-failed"));
                 return;
             }
             if (summary.active() == null) {
-                sender.sendMessage(messages.component("admin.member-none", Map.of(
+                sender.sendMessage(messages.chat("admin.member-none", Map.of(
                     "player", playerName
                 )));
             } else {
-                sender.sendMessage(messages.component("admin.member-active", Map.of(
+                sender.sendMessage(messages.chat("admin.member-active", Map.of(
                     "player", playerName,
                     "tier", summary.active().tier().displayName(),
                     "expiry", date(summary.active().expiresAt())
                 )));
             }
             if (!summary.paused().isEmpty()) {
-                sender.sendMessage(messages.component("admin.member-paused", Map.of(
+                sender.sendMessage(messages.chat("admin.member-paused", Map.of(
                     "count", summary.paused().size()
                 )));
             }
             if (!"APPLIED".equals(summary.permissionSyncStatus())) {
-                sender.sendMessage(messages.component("admin.member-syncing"));
+                sender.sendMessage(messages.chat("admin.member-syncing"));
             }
         });
     }
@@ -407,9 +415,9 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         )).whenComplete((promotion, failure) -> main(() -> {
             if (failure != null) {
                 logger.warn("Unable to create membership promotion", failure);
-                sender.sendMessage(messages.component("admin.promotion-create-failed"));
+                sender.sendMessage(messages.chat("admin.promotion-create-failed"));
             } else {
-                sender.sendMessage(messages.component("admin.promotion-created", Map.of(
+                sender.sendMessage(messages.chat("admin.promotion-created", Map.of(
                     "id", shortId(promotion),
                     "percent", percent(promotion),
                     "expiry", date(promotion.endsAt())
@@ -427,9 +435,9 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         service.stop(id, sender.getName(), reason, Instant.now()).whenComplete((stopped, failure) -> main(() -> {
             if (failure != null) {
                 logger.warn("Unable to stop membership promotion", failure);
-                sender.sendMessage(messages.component("admin.promotion-stop-failed"));
+                sender.sendMessage(messages.chat("admin.promotion-stop-failed"));
             } else {
-                sender.sendMessage(messages.component(stopped
+                sender.sendMessage(messages.chat(stopped
                     ? "admin.promotion-stopped" : "admin.promotion-not-active"));
             }
         }));
@@ -439,11 +447,11 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         service.listCurrent(Instant.now()).whenComplete((promotions, failure) -> main(() -> {
             if (failure != null) {
                 logger.warn("Unable to list membership promotions", failure);
-                sender.sendMessage(messages.component("admin.promotion-list-failed"));
+                sender.sendMessage(messages.chat("admin.promotion-list-failed"));
             } else if (promotions.isEmpty()) {
-                sender.sendMessage(messages.component("admin.promotion-list-empty"));
+                sender.sendMessage(messages.chat("admin.promotion-list-empty"));
             } else {
-                promotions.forEach(promotion -> sender.sendMessage(messages.component(
+                promotions.forEach(promotion -> sender.sendMessage(messages.chat(
                     "admin.promotion-list-line", Map.of(
                         "id", promotion.promotionId(),
                         "percent", percent(promotion),
@@ -461,15 +469,15 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         }
         service.find(UUID.fromString(args[2])).whenComplete((promotion, failure) -> main(() -> {
             if (failure != null) {
-                sender.sendMessage(messages.component("admin.promotion-not-found"));
+                sender.sendMessage(messages.chat("admin.promotion-not-found"));
             } else {
-                sender.sendMessage(messages.component("admin.promotion-info-id", Map.of(
+                sender.sendMessage(messages.chat("admin.promotion-info-id", Map.of(
                     "id", promotion.promotionId()
                 )));
-                sender.sendMessage(messages.component("admin.promotion-info-summary", Map.of(
+                sender.sendMessage(messages.chat("admin.promotion-info-summary", Map.of(
                     "target", target(promotion), "percent", percent(promotion)
                 )));
-                sender.sendMessage(messages.component("admin.promotion-info-state", Map.of(
+                sender.sendMessage(messages.chat("admin.promotion-info-state", Map.of(
                     "expiry", date(promotion.endsAt()), "status", promotion.status()
                 )));
             }
@@ -484,8 +492,9 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         String[] args
     ) {
         if (args.length == 1) {
-            return List.of("help", "reload", "discountcode", "discount", "member", "redeem", "prefix", "suffix");
+            return List.of("help", "reload", "discountcode", "discount", "member", "redeem", "mail", "prefix", "suffix");
         }
+        if (args.length == 2 && args[0].equalsIgnoreCase("mail")) return List.of("send", "edit", "list");
         if (args.length == 2 && args[0].equalsIgnoreCase("discountcode")) return List.of("create","edit","delete","list");
         if (args.length == 2 && (args[0].equalsIgnoreCase("prefix")
             || args[0].equalsIgnoreCase("suffix"))) {
@@ -573,13 +582,13 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
         }
         IdentityService identities = providers.find(IdentityProvider.KEY).orElse(null);
         if (identities == null) {
-            sender.sendMessage(messages.component("admin.player-not-found"));
+            sender.sendMessage(messages.chat("admin.player-not-found"));
             return;
         }
         String playerName = args[2];
         identities.findByName(playerName).whenComplete((identity, lookupFailure) -> {
             if (lookupFailure != null || identity.isEmpty()) {
-                main(() -> sender.sendMessage(messages.component("admin.player-not-found")));
+                main(() -> sender.sendMessage(messages.chat("admin.player-not-found")));
                 return;
             }
             UUID uuid = identity.orElseThrow().playerUuid();
@@ -595,9 +604,9 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
                         .whenComplete((id, failure) -> main(() -> {
                             if (failure != null) {
                                 logger.warn("Unable to grant personal title", failure);
-                                sender.sendMessage(messages.component("admin.prefix-failed"));
+                                sender.sendMessage(messages.chat("admin.prefix-failed"));
                             } else {
-                                sender.sendMessage(messages.component("admin.prefix-added", Map.of(
+                                sender.sendMessage(messages.chat("admin.prefix-added", Map.of(
                                     "player", playerName, "title", title, "id", id
                                 )));
                             }
@@ -616,9 +625,9 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
                 titles.remove(uuid, type, query).whenComplete((removed, failure) -> main(() -> {
                     if (failure != null) {
                         logger.warn("Unable to remove personal title", failure);
-                        sender.sendMessage(messages.component("admin.prefix-failed"));
+                        sender.sendMessage(messages.chat("admin.prefix-failed"));
                     } else {
-                        sender.sendMessage(messages.component(removed
+                        sender.sendMessage(messages.chat(removed
                             ? "admin.prefix-removed" : "admin.prefix-not-found", Map.of(
                                 "player", playerName, "title", query
                             )));
@@ -629,13 +638,13 @@ final class PaperPromotionAdminCommand implements CommandExecutor, TabCompleter 
             titles.list(uuid, type).whenComplete((entries, failure) -> main(() -> {
                 if (failure != null) {
                     logger.warn("Unable to list personal titles", failure);
-                    sender.sendMessage(messages.component("admin.prefix-failed"));
+                    sender.sendMessage(messages.chat("admin.prefix-failed"));
                     return;
                 }
-                sender.sendMessage(messages.component("admin.prefix-list", Map.of(
+                sender.sendMessage(messages.chat("admin.prefix-list", Map.of(
                     "player", playerName, "count", entries.size()
                 )));
-                entries.forEach(entry -> sender.sendMessage(messages.component(
+                entries.forEach(entry -> sender.sendMessage(messages.chat(
                     "admin.prefix-entry", Map.of(
                         "id", entry.id(), "title", entry.display(),
                         "expiry", entry.expiresAt() == null

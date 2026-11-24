@@ -1,0 +1,7 @@
+# 同一台主机的 Paper 实例可共用一个会员服务。
+# 启用前在大厅及各子服写入相同的配置。服务仅监听 127.0.0.1。
+enabled: false
+authority-server-id: lobby
+port: 28471
+# 填写同一份至少 43 个字符的随机 Base64URL 密钥。
+secret: ""

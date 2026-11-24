@@ -286,6 +286,24 @@ final class JdbcMembershipService implements MembershipService {
             .thenApply(this::signalProjection);
     }
 
+    @Override
+    public CompletionStage<Void> grantMailReward(UUID attachmentId, UUID playerUuid) {
+        Instant now = clock.instant();
+        return store.grantMailMembership(attachmentId, playerUuid, now)
+            .thenCompose(ignored -> accessAwareSummary(playerUuid, now))
+            .thenApply(this::signalProjection)
+            .thenAccept(ignored -> {});
+    }
+
+    @Override
+    public CompletionStage<Void> grantPremiumLoginReward(UUID mojangUuid, UUID playerUuid) {
+        Instant now = clock.instant();
+        return store.grantPremiumLoginMembership(mojangUuid, playerUuid, now)
+            .thenCompose(ignored -> accessAwareSummary(playerUuid, now))
+            .thenApply(this::signalProjection)
+            .thenAccept(ignored -> {});
+    }
+
     private MembershipOrderResult signalProjection(MembershipOrderResult result) {
         if (result.status() == MembershipOrderStatus.COMPLETED) {
             projectionSignal.run();

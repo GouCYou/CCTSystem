@@ -99,6 +99,10 @@ final class PaperAdminRpcModule implements CctModule {
     public CompletableFuture<Void> start(ModuleContext context) {
         this.context = context;
         BridgeRpcRouter router = context.providers().find(BridgeProvider.KEY).orElseThrow();
+        if (context.config().serverId().equals("lobby")) {
+            router.registerCall("admin.mail.list", this::listMail);
+            router.registerCall("admin.mail.mutate", this::mutateMail);
+        }
         router.registerCall("admin.redeem.generate", this::generateRedeemCodes);
         router.registerCall("admin.redeem.list", this::listRedeemData);
         router.registerCall("admin.reports.list", this::listReports);
@@ -184,6 +188,39 @@ final class PaperAdminRpcModule implements CctModule {
         return promotions().create(new CreatePromotionRequest(text(payload, "name", 64), tier,
             integer(payload, "percentOffBps", 1, 10_000), starts, ends, 0, actor,
             "管理后台设置会员折扣")).thenApply(PaperAdminRpcModule::promotionJson);
+    }
+
+    private CompletionStage<JsonNode> listMail(BridgeRpcCall call) {
+        int page = Math.max(0, Math.min(1000, call.payload().path("page").asInt(0)));
+        return databaseTask(database -> JSON.valueToTree(
+            new cn.cctstudio.cctsystem.storage.mysql.PlayerMailbox(database).list(null, page, 20)
+        ));
+    }
+
+    private CompletionStage<JsonNode> mutateMail(BridgeRpcCall call) {
+        var data = call.payload();
+        String action = text(data, "action", 8);
+        UUID id = UUID.fromString(text(data, "id", 36));
+        cn.cctstudio.cctsystem.storage.mysql.PlayerMailbox.Draft draft;
+        try {
+            draft = JSON.convertValue(data.path("draft"),
+                cn.cctstudio.cctsystem.storage.mysql.PlayerMailbox.Draft.class);
+        } catch (IllegalArgumentException exception) {
+            throw invalid("Invalid mail draft");
+        }
+        if (draft.expiresAt() != null && draft.expiresAt() <= System.currentTimeMillis()) {
+            throw invalid("The expiration time must be in the future");
+        }
+        return databaseTask(database -> {
+            var mailbox = new cn.cctstudio.cctsystem.storage.mysql.PlayerMailbox(database);
+            if (action.equals("SEND")) {
+                UUID player = mailbox.resolve(text(data,"target",36)).orElseThrow(() -> invalid("Unknown player"));
+                mailbox.send(id, player, draft, text(data,"actor",80));
+            } else if (!action.equals("EDIT") || !mailbox.edit(id, draft)) {
+                throw invalid("Only unclaimed mail may be edited");
+            }
+            return JSON.createObjectNode().put("id", id.toString());
+        });
     }
 
     private CompletionStage<JsonNode> mutateDiscountCode(BridgeRpcCall call) {

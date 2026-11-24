@@ -47,6 +47,11 @@ public final class MembershipRpcModule implements CctModule {
     public CompletableFuture<Void> start(ModuleContext context) {
         BridgeRpcRouter router = context.providers().find(BridgeProvider.KEY).orElseThrow();
         MembershipService service = context.providers().find(MembershipServiceProvider.KEY).orElseThrow();
+        registerHandlers(router, service);
+        return CompletableFuture.completedFuture(null);
+    }
+
+    static void registerHandlers(BridgeRpcRouter router, MembershipService service) {
         router.register(CATALOG_OPERATION, ignored -> mapErrors(
             service.catalog().thenApply(MembershipRpcModule::catalogJson)
         ));
@@ -75,7 +80,6 @@ public final class MembershipRpcModule implements CctModule {
                     return result;
                 }));
         });
-        return CompletableFuture.completedFuture(null);
     }
 
     @Override

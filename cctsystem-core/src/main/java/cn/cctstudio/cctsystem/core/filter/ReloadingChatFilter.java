@@ -191,7 +191,7 @@ public final class ReloadingChatFilter {
             if (parent != null) Files.createDirectories(parent);
             if (Files.notExists(file)) {
                 if (defaults == null) throw new IOException("Default chat-filter.json is missing");
-                Files.copy(defaults, file, StandardCopyOption.COPY_ATTRIBUTES);
+                Files.copy(defaults, file);
             }
         } catch (IOException exception) {
             throw new IllegalStateException("Unable to prepare chat filter file: " + file, exception);

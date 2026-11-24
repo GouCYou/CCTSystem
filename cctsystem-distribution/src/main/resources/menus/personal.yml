@@ -31,6 +31,10 @@ items:
     slot: 22
     material: ENDER_EYE
     action: OPEN_NICKNAME
+  mail:
+    slot: 24
+    material: WRITABLE_BOOK
+    action: OPEN_MAIL
   close:
     slot: 8
     material: BARRIER

@@ -1,6 +1,7 @@
 package cn.cctstudio.cctsystem.membership;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -14,6 +15,10 @@ import cn.cctstudio.cctsystem.promotion.CreatePromotionRequest;
 import cn.cctstudio.cctsystem.promotion.Promotion;
 import cn.cctstudio.cctsystem.promotion.PromotionService;
 import cn.cctstudio.cctsystem.storage.mysql.DatabaseAccess;
+import cn.cctstudio.cctsystem.storage.mysql.PremiumLoginStore;
+import cn.cctstudio.cctsystem.core.auth.PremiumLoginProof;
+import cn.cctstudio.cctsystem.core.auth.PremiumLoginProof.Session;
+import cn.cctstudio.cctsystem.core.config.PremiumLoginConfig;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -78,6 +83,93 @@ final class JdbcMembershipServiceIntegrationTest {
             false,
             projectionSignals::incrementAndGet
         );
+    }
+
+    @Test
+    void javaRewardQueuesBehindHigherMembershipAndTwoWorkersGrantOnlyOnce() throws Exception {
+        Session session = javaSession("RewardA");
+        var rewardStore = new PremiumLoginStore(database);
+        var config = javaReward();
+        UUID player = session.playerUuid();
+        service.admin(new AdminMembershipRequest(
+            AdminMembershipAction.GRANT, player, "mvp", 30, null, "test", "seed"
+        )).toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertTrue(rewardStore.link(session, 1L, config));
+        var first = service.grantPremiumLoginReward(session.mojangUuid(), player).toCompletableFuture();
+        var second = service.grantPremiumLoginReward(session.mojangUuid(), player).toCompletableFuture();
+        CompletableFuture.allOf(first, second).get(5, TimeUnit.SECONDS);
+
+        MembershipSummary summary = service.summary(player).toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertEquals("mvp", summary.active().tier().key());
+        assertEquals(1, summary.paused().size());
+        assertEquals("vip_plus", summary.paused().getFirst().tier().key());
+        assertEquals(14L * 86_400L, summary.paused().getFirst().remainingSeconds());
+        assertEquals(PremiumLoginStore.Status.COMPLETED, rewardStore.find(session).orElseThrow().membership());
+    }
+
+    @Test
+    void unlinkedJavaBindingNeedsAFreshRequestAndKeepsItsFirstReward() throws Exception {
+        Session original = javaSession("Unlink");
+        var rewards = new PremiumLoginStore(database);
+        var config = javaReward();
+        assertTrue(rewards.link(original, 41L, config));
+        assertTrue(rewards.changeStatus(original.mojangUuid(), PremiumLoginStore.Step.POINTS,
+            PremiumLoginStore.Status.PENDING, PremiumLoginStore.Status.COMPLETED));
+        assertFalse(rewards.unlink(UUID.randomUUID(), original.name()));
+        assertTrue(rewards.unlink(original.playerUuid(), original.name()));
+        assertFalse(rewards.unlink(original.playerUuid(), original.name()));
+        assertTrue(rewards.hasBindingHistory(original.name()));
+        assertFalse(rewards.isLinked(original.playerUuid()));
+        assertTrue(rewards.find(original).isEmpty());
+        assertTrue(rewards.linkedMojangUuid(original.name()).isEmpty());
+        assertFalse(rewards.link(original, 41L, config));
+        Session fresh = new Session(original.mojangUuid(), UUID.randomUUID(), original.playerUuid(),
+            original.name(), System.currentTimeMillis() + 1_000);
+        assertFalse(rewards.link(fresh, 42L, config));
+        assertTrue(rewards.link(fresh, 41L, config));
+        assertTrue(rewards.isLinked(original.playerUuid()));
+        var claim = rewards.find(fresh).orElseThrow();
+        assertEquals(original.sessionId(), claim.firstSession());
+        assertEquals(PremiumLoginStore.Status.COMPLETED, claim.pointsDelivery());
+    }
+
+    @Test
+    void javaBindingRejectsMojangNameAndRegistrationChangesAndPromotesALowerTier() throws Exception {
+        Session session = javaSession("RewardB");
+        var rewards = new PremiumLoginStore(database);
+        var config = javaReward();
+        assertTrue(rewards.link(session, 31L, config));
+        assertFalse(rewards.link(session, 32L, config));
+        assertEquals(session.mojangUuid(), rewards.linkedMojangUuid(session.name()).orElseThrow());
+        String otherCase = session.name().toLowerCase(java.util.Locale.ROOT);
+        assertTrue(rewards.linkedMojangUuid(otherCase).isEmpty());
+        assertFalse(rewards.link(new Session(UUID.randomUUID(), UUID.randomUUID(),
+            PremiumLoginProof.offlineUuid(otherCase), otherCase, session.bindingRequestedAt()), 31L, config));
+        assertFalse(rewards.link(new Session(session.mojangUuid(), UUID.randomUUID(),
+            PremiumLoginProof.offlineUuid("OtherName"), "OtherName", session.bindingRequestedAt()), 31L, config));
+        assertTrue(rewards.link(new Session(session.mojangUuid(), UUID.randomUUID(),
+            session.playerUuid(), session.name(), session.bindingRequestedAt()), 31L, config));
+        assertEquals(session.sessionId(), rewards.find(session).orElseThrow().firstSession());
+
+        service.admin(new AdminMembershipRequest(
+            AdminMembershipAction.GRANT, session.playerUuid(), "vip", 30, null, "test", "seed"
+        )).toCompletableFuture().get(5, TimeUnit.SECONDS);
+        service.grantPremiumLoginReward(session.mojangUuid(), session.playerUuid())
+            .toCompletableFuture().get(5, TimeUnit.SECONDS);
+        MembershipSummary summary = service.summary(session.playerUuid()).toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertEquals("vip_plus", summary.active().tier().key());
+        assertEquals(NOW.plusSeconds(14L * 86_400L), summary.active().expiresAt());
+        assertEquals("vip", summary.paused().getFirst().tier().key());
+    }
+
+    private static Session javaSession(String name) {
+        String uniqueName = name + UUID.randomUUID().toString().substring(0, 6);
+        return new Session(UUID.randomUUID(), UUID.randomUUID(), PremiumLoginProof.offlineUuid(uniqueName), uniqueName, 1L);
+    }
+
+    private static PremiumLoginConfig javaReward() {
+        return new PremiumLoginConfig(false, "", "login", "lobby", "lobby", null,
+            new PremiumLoginConfig.Rewards("vip_plus", 14, 50, List.of()), false);
     }
 
     @Test

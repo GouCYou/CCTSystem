@@ -35,7 +35,11 @@ final class MigrationRunner {
         new Migration(14, "player_titles", "/db/migration/V14__player_titles.sql"),
         new Migration(15, "bulk_points_admin", "/db/migration/V15__bulk_points_admin.sql"),
         new Migration(16, "chat_filter_incidents", "/db/migration/V16__chat_filter_incidents.sql"),
-        new Migration(17, "discount_codes", "/db/migration/V17__discount_codes.sql")
+        new Migration(17, "discount_codes", "/db/migration/V17__discount_codes.sql"),
+        new Migration(18, "java_login_rewards", "/db/migration/V18__java_login_rewards.sql"),
+        new Migration(19, "mail_and_lag_compensation", "/db/migration/V19__mail_and_lag_compensation.sql"),
+        new Migration(20, "mail_read_state", "/db/migration/V20__mail_read_state.sql"),
+        new Migration(21, "java_binding_unlinked_at", "/db/migration/V21__java_binding_unlinked_at.sql")
     );
 
     private final DataSource dataSource;

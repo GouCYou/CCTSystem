@@ -96,11 +96,11 @@ final class PaperExchangeMenu implements Listener, CommandExecutor, TabCompleter
         String[] arguments
     ) {
         if (!(sender instanceof Player player)) {
-            sender.sendMessage(messages.component("commands.only-player"));
+            sender.sendMessage(messages.chat("commands.only-player"));
             return true;
         }
         if (arguments.length == 0 || !arguments[0].equalsIgnoreCase("exchange")) {
-            player.sendMessage(messages.component("menus.exchange.usage"));
+            player.sendMessage(messages.chat("menus.exchange.usage"));
             return true;
         }
         if (arguments.length == 1) {
@@ -111,7 +111,7 @@ final class PaperExchangeMenu implements Listener, CommandExecutor, TabCompleter
             executeCommand(player, arguments[1]);
             return true;
         }
-        player.sendMessage(messages.component("menus.exchange.usage"));
+        player.sendMessage(messages.chat("menus.exchange.usage"));
         return true;
     }
 
@@ -305,7 +305,7 @@ final class PaperExchangeMenu implements Listener, CommandExecutor, TabCompleter
                     return null;
                 }
                 if (throwable != null) {
-                    player.sendMessage(messages.component("menus.exchange.unavailable"));
+                    player.sendMessage(messages.chat("menus.exchange.unavailable"));
                     return null;
                 }
                 int amount;
@@ -320,11 +320,11 @@ final class PaperExchangeMenu implements Listener, CommandExecutor, TabCompleter
                 }
                 if ((amount != 1 && amount != 10 && amount != 100)
                     && !rawAmount.equalsIgnoreCase("max")) {
-                    player.sendMessage(messages.component("menus.exchange.invalid-amount"));
+                    player.sendMessage(messages.chat("menus.exchange.invalid-amount"));
                     return null;
                 }
                 if (amount < 1 || amount > quote.maximumExchangeablePoints()) {
-                    player.sendMessage(messages.component(unavailableReasonPath(quote, Math.max(1, amount))));
+                    player.sendMessage(messages.chat(unavailableReasonPath(quote, Math.max(1, amount))));
                     return null;
                 }
                 execute(player, amount, ExchangeOrigin.COMMAND);
@@ -352,7 +352,7 @@ final class PaperExchangeMenu implements Listener, CommandExecutor, TabCompleter
             }
             if (throwable != null) {
                 logger.warn("Player exchange request failed", throwable);
-                player.sendMessage(messages.component("menus.exchange.unavailable"));
+                player.sendMessage(messages.chat("menus.exchange.unavailable"));
                 return null;
             }
             player.sendMessage(resultMessage(result));
@@ -365,11 +365,11 @@ final class PaperExchangeMenu implements Listener, CommandExecutor, TabCompleter
 
     private ExchangeService service(Player player) {
         if (sourceId == null) {
-            player.sendMessage(messages.component("menus.exchange.unavailable-server"));
+            player.sendMessage(messages.chat("menus.exchange.unavailable-server"));
             return null;
         }
         return providers.find(ExchangeServiceProvider.KEY).orElseGet(() -> {
-            player.sendMessage(messages.component("menus.exchange.unavailable"));
+            player.sendMessage(messages.chat("menus.exchange.unavailable"));
             return null;
         });
     }

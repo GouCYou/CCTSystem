@@ -7,6 +7,7 @@ import cn.cctstudio.cctsystem.core.logging.CctLogger;
 import cn.cctstudio.cctsystem.core.provider.ProviderRegistry;
 import cn.cctstudio.cctsystem.membership.MembershipEntitlement;
 import cn.cctstudio.cctsystem.membership.MembershipException;
+import cn.cctstudio.cctsystem.membership.MembershipFailures;
 import cn.cctstudio.cctsystem.membership.MembershipMenuSnapshot;
 import cn.cctstudio.cctsystem.membership.MembershipMenuTier;
 import cn.cctstudio.cctsystem.membership.MembershipOrderResult;
@@ -38,6 +39,7 @@ import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
@@ -62,6 +64,7 @@ final class PaperMembershipMenu implements Listener {
     private final PaperMenus menus;
     private final PaperTitleService titleService;
     private final PaperNicknameService nicknameService;
+    private final PaperMailbox mailbox;
     private final List<MembershipTier> configuredTiers;
     private final Set<UUID> inFlight = ConcurrentHashMap.newKeySet();
     private final Map<UUID, CompletableFuture<PersonalData>> personalLoads =
@@ -83,7 +86,8 @@ final class PaperMembershipMenu implements Listener {
         PaperMessages messages,
         PaperMenus menus,
         PaperTitleService titleService,
-        PaperNicknameService nicknameService
+        PaperNicknameService nicknameService,
+        PaperMailbox mailbox
     ) {
         this.plugin = plugin;
         this.providers = providers;
@@ -96,6 +100,7 @@ final class PaperMembershipMenu implements Listener {
         this.menus = menus;
         this.titleService = titleService;
         this.nicknameService = nicknameService;
+        this.mailbox = mailbox;
         this.configuredTiers = config.membership().tiers().stream()
             .filter(MembershipTierConfig::enabled)
             .sorted(java.util.Comparator.comparingInt(MembershipTierConfig::priority))
@@ -156,13 +161,25 @@ final class PaperMembershipMenu implements Listener {
                 case "OPEN_EXCHANGE" -> exchangeMenu.open(player);
                 case "OPEN_PREFIX" -> titleService.command(player, new String[0]);
                 case "OPEN_NICKNAME" -> nicknameService.open(player);
-                case "REDEEM_HINT" -> player.sendMessage(messages.component("menus.personal.redeem-hint"));
+                case "OPEN_MAIL" -> {
+                    if (mailbox.enabled()) plugin.getServer().getScheduler().runTask(plugin, () -> {
+                        if (player.getOpenInventory().getTopInventory() != personal.inventory) return;
+                        player.closeInventory();
+                        mailbox.open(player);
+                    });
+                }
+                case "REDEEM_HINT" -> player.sendMessage(messages.chat("menus.personal.redeem-hint"));
                 case "CLOSE" -> player.closeInventory();
                 default -> { }
             }
             return;
         }
         if (holder instanceof MembershipHolder memberships) {
+            if (memberships.applyingDiscount && (slot == memberships.inventory.getSize() - 1
+                || "PURCHASE_MEMBERSHIP".equals(memberships.layout.actionAt(slot)))) {
+                player.sendMessage(messages.chat("discount-code.applying"));
+                return;
+            }
             if(slot==memberships.inventory.getSize()-1) {
                 plugin.getServer().getScheduler().runTask(plugin,() -> openDiscountAnvil(player,memberships)); return;
             }
@@ -308,6 +325,11 @@ final class PaperMembershipMenu implements Listener {
         putConfigured(inventory, holder.layout.item("nickname"),
             messages.component("menus.personal.nickname-name"),
             messages.components("menus.personal.nickname-lore"), Material.ENDER_EYE);
+        var mail = holder.layout.items().get("mail");
+        if (mailbox.enabled() && mail != null) {
+            putConfigured(inventory, mail, messages.component("menus.personal.mail-name"),
+                messages.components("menus.personal.mail-lore"), Material.WRITABLE_BOOK);
+        }
         putConfigured(inventory, holder.layout.item("close"),
             messages.component("menus.personal.close-name"), List.of(), Material.BARRIER);
     }
@@ -335,8 +357,9 @@ final class PaperMembershipMenu implements Listener {
                 inventory.setItem(benefits.slot(), benefitsBook(view.tier(), benefits));
             }
         }
-        inventory.setItem(inventory.getSize()-1,item(Material.NAME_TAG,messages.component("discount-code.title"),
-            holder.discountCode==null ? List.of() : List.of(Component.text(holder.discountCode))));
+        inventory.setItem(inventory.getSize() - 1, item(holder.applyingDiscount ? Material.CLOCK : Material.NAME_TAG,
+            messages.component(holder.applyingDiscount ? "discount-code.applying" : "discount-code.title"),
+            holder.discountCode == null ? List.of() : List.of(Component.text(holder.discountCode))));
         putConfigured(inventory, holder.layout.item("back"),
             messages.component("menus.membership.back-name"), List.of(), Material.ARROW);
     }
@@ -570,7 +593,7 @@ final class PaperMembershipMenu implements Listener {
             if (!ready(player)) return;
             if (failure != null) {
                 logFailure("Membership purchase failed", failure);
-                player.sendMessage(messages.component(errorPath(failure)));
+                player.sendMessage(messages.chat(errorPath(failure)));
                 return;
             }
             showPurchaseResult(player, order);
@@ -581,17 +604,17 @@ final class PaperMembershipMenu implements Listener {
         if (order.status() == MembershipOrderStatus.COMPLETED) {
             summaryCache.remove(player.getUniqueId());
             menuCache.remove(player.getUniqueId());
-            player.sendMessage(messages.component("menus.confirmation.completed", Map.of(
+            player.sendMessage(messages.chat("menus.confirmation.completed", Map.of(
                 "expiry", date(order.expiresAt())
             )));
             openMemberships(player);
         } else if (order.status() == MembershipOrderStatus.COMPENSATED) {
-            player.sendMessage(messages.component("menus.confirmation.compensated"));
+            player.sendMessage(messages.chat("menus.confirmation.compensated"));
         } else if (order.status() == MembershipOrderStatus.REVIEW_REQUIRED
             || order.status() == MembershipOrderStatus.COMPENSATION_PENDING) {
-            player.sendMessage(messages.component("menus.confirmation.review-required"));
+            player.sendMessage(messages.chat("menus.confirmation.review-required"));
         } else {
-            player.sendMessage(messages.component(errorPath(order.errorCode())));
+            player.sendMessage(messages.chat(errorPath(order.errorCode())));
         }
     }
 
@@ -599,7 +622,7 @@ final class PaperMembershipMenu implements Listener {
         MembershipService memberships = providers.find(MembershipServiceProvider.KEY).orElse(null);
         PointsService points = providers.find(PointsServiceProvider.KEY).orElse(null);
         if (memberships == null || points == null) {
-            player.sendMessage(messages.component("menus.confirmation.service-unavailable"));
+            player.sendMessage(messages.chat("menus.confirmation.service-unavailable"));
             return null;
         }
         return new Services(memberships, points);
@@ -617,7 +640,7 @@ final class PaperMembershipMenu implements Listener {
     }
 
     private void logFailure(String message, Throwable failure) {
-        cn.cctstudio.cctsystem.membership.MembershipFailures.log(logger, message, failure);
+        MembershipFailures.log(logger, message, failure);
     }
 
     private ItemStack playerHead(Player player, List<Component> lore) {
@@ -813,6 +836,8 @@ final class PaperMembershipMenu implements Listener {
     private static final class MembershipHolder implements InventoryHolder {
         private MembershipSummary summary;
         private String discountCode;
+        private String discountInput;
+        private boolean applyingDiscount;
         private int discountRevision;
         private Integer points;
         private List<MembershipMenuTier> tiers;
@@ -865,7 +890,7 @@ final class PaperMembershipMenu implements Listener {
     }
 
     private void openDiscountAnvil(Player player, MembershipHolder holder) {
-        if (!ready(player) || holder.summary==null || inFlight.contains(player.getUniqueId())
+        if (!ready(player) || inFlight.contains(player.getUniqueId())
             || player.getOpenInventory().getTopInventory()!=holder.inventory) return;
         var view=org.bukkit.inventory.MenuType.ANVIL.builder().title(messages.component("discount-code.title"))
             .checkReachable(false).build(player);
@@ -873,12 +898,13 @@ final class PaperMembershipMenu implements Listener {
         discountAnvils.put(player.getUniqueId(),session);
         view.open();
         if (player.getOpenInventory()!=view) { discountAnvils.remove(player.getUniqueId()); view.getTopInventory().clear(); return; }
-        view.getTopInventory().setItem(0,item(Material.NAME_TAG,Component.text(holder.discountCode==null ? "" : holder.discountCode),List.of()));
+        view.getTopInventory().setItem(0, item(Material.NAME_TAG,
+            Component.text(holder.discountInput == null ? "" : holder.discountInput), List.of()));
         view.setRepairCost(0); view.setRepairItemCountCost(0); view.setMaximumRepairCost(Integer.MAX_VALUE);
         view.getTopInventory().setItem(2,item(Material.NAME_TAG,messages.component("discount-code.apply"),List.of()));
     }
 
-    @EventHandler
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onDiscountAnvilPrepare(org.bukkit.event.inventory.PrepareAnvilEvent event) {
         DiscountAnvil session=discountAnvils.get(event.getView().getPlayer().getUniqueId());
         if (session==null || session.view!=event.getView()) return;
@@ -898,33 +924,72 @@ final class PaperMembershipMenu implements Listener {
         String input=session.view.getRenameText();
         String code=input==null ? "" : java.text.Normalizer.normalize(input.trim(),java.text.Normalizer.Form.NFC);
         if(!code.isEmpty() && !code.matches("[\\p{L}\\p{N}_-]{1,32}")) {
-            player.sendMessage(messages.component("discount-code.invalid")); return true;
+            player.sendMessage(messages.chat("discount-code.invalid")); return true;
         }
-        Services services=services(player); if(services==null) return true;
-        session.applying=true;
-        session.view.getTopInventory().setItem(2,item(Material.CLOCK,messages.component("discount-code.applying"),List.of()));
-        session.holder.discountRevision++;
-        services.memberships().menu(player.getUniqueId(),code.isEmpty() ? null : code)
-            .whenComplete((quote,failure) -> main(() -> {
-                if(!ready(player) || discountAnvils.get(player.getUniqueId())!=session || player.getOpenInventory()!=session.view) return;
-                session.applying=false;
-                if(failure!=null) {
-                    player.sendMessage(messages.component(errorPath(failure)));
-                    session.view.getTopInventory().setItem(2,item(Material.NAME_TAG,messages.component("discount-code.apply"),List.of()));
-                    session.view.setRepairCost(0); return;
-                }
-                session.holder.summary=quote.summary(); session.holder.tiers=quote.tiers(); session.holder.discountCode=code.isEmpty() ? null : code;
-                session.view.getTopInventory().clear(); discountAnvils.remove(player.getUniqueId());
-                renderMembership(player,session.holder); player.openInventory(session.holder.inventory);
-            }));
+        session.applying = true;
+        plugin.getServer().getScheduler().runTask(plugin, () -> {
+            if (!ready(player) || discountAnvils.get(player.getUniqueId()) != session
+                || player.getOpenInventory() != session.view) return;
+            MembershipHolder holder = session.holder;
+            holder.discountInput = code;
+            holder.applyingDiscount = true;
+            holder.discountRevision++;
+            renderMembership(player, holder);
+            // The close listener clears the synthetic anvil slots before they can be returned.
+            player.openInventory(holder.inventory);
+            if (player.getOpenInventory().getTopInventory() != holder.inventory) {
+                holder.applyingDiscount = false;
+                session.applying = false;
+                player.sendMessage(messages.chat("discount-code.service-unavailable"));
+                return;
+            }
+            Services services = services(player);
+            if (services == null) {
+                holder.applyingDiscount = false;
+                renderMembership(player, holder);
+                return;
+            }
+            applyDiscount(player, holder, services.memberships(), true);
+        });
         return true;
+    }
+
+    private void applyDiscount(Player player, MembershipHolder holder, MembershipService memberships, boolean canRetry) {
+        String code = holder.discountInput.isEmpty() ? null : holder.discountInput;
+        CompletableFuture.completedFuture(code)
+            .thenCompose(value -> memberships.menu(player.getUniqueId(), value))
+            .whenComplete((snapshot, failure) -> main(() -> {
+                if (!ready(player) || player.getOpenInventory().getTopInventory() != holder.inventory) return;
+                boolean bridgeUnavailable = MembershipFailures.temporaryTransport(failure);
+                if (canRetry && bridgeUnavailable) {
+                    plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+                        if (ready(player) && player.getOpenInventory().getTopInventory() == holder.inventory) {
+                            applyDiscount(player, holder, memberships, false);
+                        }
+                    }, 20L);
+                    return;
+                }
+                holder.applyingDiscount = false;
+                if (failure == null) {
+                    holder.summary = snapshot.summary();
+                    holder.tiers = snapshot.tiers();
+                    holder.discountCode = code;
+                    player.sendMessage(messages.chat(code == null ? "discount-code.cleared" : "discount-code.applied"));
+                } else {
+                    String error = bridgeUnavailable ? "discount-code.service-unavailable" : errorPath(failure);
+                    if (!error.equals("discount-code.invalid")) logFailure("Unable to apply membership discount", failure);
+                    player.sendMessage(messages.chat(error));
+                }
+                renderMembership(player, holder);
+            }));
     }
 
     @EventHandler
     public void onDiscountAnvilClose(org.bukkit.event.inventory.InventoryCloseEvent event) {
         DiscountAnvil session=discountAnvils.get(event.getPlayer().getUniqueId());
         if(session!=null && session.view==event.getView()) {
-            event.getInventory().clear(); discountAnvils.remove(event.getPlayer().getUniqueId());
+            discountAnvils.remove(event.getPlayer().getUniqueId());
+            event.getInventory().clear();
         }
     }
 

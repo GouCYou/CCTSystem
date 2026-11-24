@@ -10,10 +10,14 @@ import cn.cctstudio.cctsystem.core.CctRuntime;
 import cn.cctstudio.cctsystem.core.config.CctConfig;
 import cn.cctstudio.cctsystem.core.config.ConfigLoader;
 import cn.cctstudio.cctsystem.core.config.MembershipTierConfig;
+import cn.cctstudio.cctsystem.core.config.PremiumLoginConfig;
 import cn.cctstudio.cctsystem.core.filter.ReloadingChatFilter;
 import cn.cctstudio.cctsystem.identity.IdentityModule;
 import cn.cctstudio.cctsystem.identity.IdentityProvider;
 import cn.cctstudio.cctsystem.storage.mysql.DatabaseManager;
+import cn.cctstudio.cctsystem.storage.mysql.DatabaseProvider;
+import cn.cctstudio.cctsystem.storage.mysql.SocialBindingLookup;
+import cn.cctstudio.cctsystem.storage.mysql.PremiumLoginStore;
 import cn.cctstudio.cctsystem.skins.SkinAvatarRpcModule;
 import cn.cctstudio.cctsystem.skins.SkinsRestorerInstaller;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -84,6 +88,23 @@ public final class VelocityBootstrap {
     private final Map<UUID, Instant> shoutCooldowns = new java.util.concurrent.ConcurrentHashMap<>();
     private volatile ReloadingChatFilter chatFilter;
     private volatile CctRuntime runtime;
+    private volatile VelocityLagCompensation lagCompensation;
+
+    /** Read-only account status for the navigation plugin. */
+    public CompletableFuture<Map<String, Boolean>> navigationBindings(UUID playerUuid) {
+        CctRuntime current = runtime;
+        if (current == null) return CompletableFuture.failedFuture(new IllegalStateException("CCTSystem is not ready"));
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                var database = current.providers().find(DatabaseProvider.KEY).orElseThrow();
+                var bindings = SocialBindingLookup.status(database, playerUuid);
+                return Map.of("bind", bindings.qq(), "bind-discord", bindings.discord(),
+                    "premium", new PremiumLoginStore(database).isLinked(playerUuid));
+            } catch (java.sql.SQLException failure) {
+                throw new java.util.concurrent.CompletionException(failure);
+            }
+        }, current.executors().blocking());
+    }
 
     @Inject
     public VelocityBootstrap(ProxyServer proxy, Logger logger, @DataDirectory Path dataDirectory) {
@@ -108,7 +129,17 @@ public final class VelocityBootstrap {
                 new VelocityTaskExecutor(this, proxy),
                 logger
             );
+            if (config.database().enabled()) {
+                try {
+                    lagCompensation = new VelocityLagCompensation(created, proxy, dataDirectory);
+                    proxy.getScheduler().buildTask(this, lagCompensation::notifyOnline)
+                        .repeat(Duration.ofSeconds(5)).schedule();
+                } catch (IOException exception) {
+                    logger.warn("Unable to read network compensation configuration");
+                }
+            }
             configureInfrastructure(created);
+            configurePremiumLogin(created);
             proxy.getScheduler().buildTask(this, this::refreshVanishTab)
                 .delay(Duration.ofSeconds(1))
                 .repeat(Duration.ofSeconds(1))
@@ -148,6 +179,17 @@ public final class VelocityBootstrap {
                     vanished.remove(playerUuid);
                 }
                 refreshVanishTab();
+                return;
+            }
+            if ("FRIEND_MESSAGE".equals(type)) {
+                var player = connection.getPlayer();
+                String arguments = input.readUTF();
+                if (arguments.length() > 512 || arguments.chars().anyMatch(Character::isISOControl)
+                    || player.getCurrentServer().filter(current -> current == connection).isEmpty()
+                    || connection.getServerInfo().getName().equals("login")) return;
+                proxy.getCommandManager().executeAsync(player, "fmsg " + arguments).thenAccept(result -> {
+                    if (!result) player.sendMessage(Component.text("好友私信暂不可用。", net.kyori.adventure.text.format.NamedTextColor.GREEN));
+                });
                 return;
             }
             if ("CONNECT_LOBBY".equals(type)) {
@@ -288,6 +330,35 @@ public final class VelocityBootstrap {
         }
     }
 
+    public java.util.concurrent.CompletionStage<Void> observeNetworkLag(boolean recovered, java.util.Collection<UUID> affected) {
+        var compensation = lagCompensation;
+        if (compensation == null) return CompletableFuture.completedFuture(null);
+        return compensation.observe(recovered, affected);
+    }
+
+    private void configurePremiumLogin(CctRuntime created) {
+        try {
+            PremiumLoginConfig premium = PremiumLoginConfig.load(dataDirectory);
+            if (!premium.enabled()) return;
+            if (proxy.getConfiguration().isOnlineMode()) {
+                logger.warn("Java login requires an offline-mode Velocity proxy");
+                return;
+            }
+            if (!created.config().database().enabled()) {
+                logger.warn("Java login requires the shared CCTSystem database on Velocity");
+                return;
+            }
+            var loginServer = proxy.getServer(premium.loginServer()).orElseThrow();
+            var handler = new VelocityPremiumLogin(premium, loginServer, created, proxy);
+            proxy.getEventManager().register(this, handler);
+            proxy.getCommandManager().register(
+                proxy.getCommandManager().metaBuilder("premium").plugin(this).build(), handler
+            );
+        } catch (IOException | RuntimeException exception) {
+            logger.warn("Java login was disabled on Velocity. Check premium-login.yml and the configured login server.");
+        }
+    }
+
     private void configureInfrastructure(CctRuntime created) {
         CctConfig config = created.config();
         if (config.database().enabled()) {
@@ -303,6 +374,7 @@ public final class VelocityBootstrap {
         if (config.bridge().enabled()) {
             BridgeRpcRouter router = new BridgeRpcRouter();
             created.providers().register(BridgeProvider.KEY, router);
+            if (lagCompensation != null) lagCompensation.register(router);
             Set<Capability> baseCapabilities = new HashSet<>();
             if (config.roles().contains(NodeRole.NETWORK_AUTHORITY)) {
                 baseCapabilities.add(Capability.NETWORK_STATUS_READ);
@@ -312,7 +384,7 @@ public final class VelocityBootstrap {
                     router.register(Capability.PROFILE_READ.value(), this::playerProfile);
                 }
             }
-            created.addAfterModules(new BridgeClient(
+            BridgeClient bridge = new BridgeClient(
                 config,
                 PlatformType.VELOCITY,
                 created.bootId(),
@@ -325,7 +397,14 @@ public final class VelocityBootstrap {
                 router,
                 created.executors(),
                 logger
-            ));
+            );
+            created.addAfterModules(bridge);
+            if (config.roles().contains(NodeRole.PROXY)) {
+                proxy.getCommandManager().register(
+                    proxy.getCommandManager().metaBuilder("discordbind").plugin(this).build(),
+                    new VelocityDiscordBinding(bridge)
+                );
+            }
         }
         if (proxy.getPluginManager().getPlugin("skinsrestorer").isPresent()) {
             SkinsRestorerInstaller.install(created);

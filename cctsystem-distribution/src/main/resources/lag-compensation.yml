@@ -1,0 +1,5 @@
+# Velocity 的游戏入口连续波动并影响玩家时自动补偿。管理后台设置优先。
+enabled: true
+rewards:
+  - type: SURVIVAL_COINS
+    amount: 1000

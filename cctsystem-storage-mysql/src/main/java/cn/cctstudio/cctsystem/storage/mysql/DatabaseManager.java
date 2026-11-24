@@ -92,6 +92,7 @@ public final class DatabaseManager implements LifecycleComponent, DatabaseAccess
         HikariConfig hikari = new HikariConfig();
         hikari.setPoolName("CCTSystem-" + nodeId);
         hikari.setJdbcUrl(config.jdbcUrl());
+            hikari.setDriverClassName("com.mysql.cj.jdbc.Driver");
         hikari.setUsername(config.username());
         hikari.setPassword(config.password());
         hikari.setMaximumPoolSize(config.maximumPoolSize());

@@ -225,6 +225,10 @@ modules:
 
 未来同类服务器增加副本时，用独立 `node-id`，例如逻辑 `lobby` 下的 `lobby-1/lobby-2`。mutation authority 必须唯一，或使用数据库租约选主；不能随机负载均衡写请求。
 
+同主机部署时，可在 Paper 节点的 `plugins/CCTSystem/membership-local.yml` 启用本机会员服务。所有节点使用相同的权威服务器 ID、端口和随机密钥。默认由大厅监听 `127.0.0.1:28471`，其他 Paper 节点通过回环连接查询会员、校验折扣、报价和提交购买。大厅使用现有 MySQL、PlayerPoints 和 LuckPerms 服务，官网和后台继续通过 Cloudflare Worker 调用大厅。创造服可保留其他业务角色，其会员请求也交给大厅。
+
+部署时先启动大厅并确认日志出现 `Membership loopback service listening`，再重启其余 Paper 节点。用生存服和创造服的 `/cct vip` 验证同一个测试折扣码，并从官网会员页核对报价。配置中的密钥应仅允许服务账号读取，端口只用于同一台主机的实例。
+
 ## 6. 核心 Service 与 Provider
 
 ### 6.1 Service

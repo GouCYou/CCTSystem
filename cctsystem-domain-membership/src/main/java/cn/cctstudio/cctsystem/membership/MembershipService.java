@@ -42,6 +42,18 @@ public interface MembershipService {
 
     CompletionStage<MembershipSummary> admin(AdminMembershipRequest request);
 
+    default CompletionStage<Void> grantMailReward(UUID attachmentId, UUID playerUuid) {
+        return java.util.concurrent.CompletableFuture.failedFuture(
+            new UnsupportedOperationException("Mail rewards require the membership authority")
+        );
+    }
+
+    default CompletionStage<Void> grantPremiumLoginReward(UUID mojangUuid, UUID playerUuid) {
+        return java.util.concurrent.CompletableFuture.failedFuture(
+            new UnsupportedOperationException("Java login rewards require the membership authority")
+        );
+    }
+
     default CompletionStage<MembershipSummary> grantSocialBindingReward(UUID playerUuid) {
         return java.util.concurrent.CompletableFuture.failedFuture(new MembershipException(
             "MEMBERSHIP_SOCIAL_REWARD_UNAVAILABLE", "Social binding reward is unavailable", true

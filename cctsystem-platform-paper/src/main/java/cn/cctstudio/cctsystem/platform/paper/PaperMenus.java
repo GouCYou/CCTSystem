@@ -70,6 +70,7 @@ final class PaperMenus {
         ConfigurationSection section = yaml.getConfigurationSection("items");
         if (section != null) {
             for (String itemId : section.getKeys(false)) {
+                if (id.equals("personal") && itemId.equals("mail") && !yaml.isSet("items.mail")) continue;
                 String base = "items." + itemId + ".";
                 int slot = yaml.getInt(base + "slot", -1);
                 if (slot < 0 || slot >= size) {
@@ -90,6 +91,17 @@ final class PaperMenus {
                         .trim().toUpperCase(Locale.ROOT),
                     yaml.getString(base + "value", "")
                 ));
+            }
+        }
+        if (id.equals("personal") && !items.containsKey("mail")) {
+            int preferred = yaml.getInt("items.mail.slot", 24);
+            // Installed layouts can already use the default slot.
+            for (int offset = 0; offset < size; offset++) {
+                int slot = Math.floorMod(preferred + offset, size);
+                if (items.values().stream().noneMatch(item -> item.slot() == slot)) {
+                    items.put("mail", new MenuItemDefinition("mail", slot, "WRITABLE_BOOK", "OPEN_MAIL", ""));
+                    break;
+                }
             }
         }
         return new MenuDefinition(

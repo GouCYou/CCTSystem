@@ -48,12 +48,12 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] arguments) {
         if (!(sender instanceof Player player)) {
-            sender.sendMessage(messages.component("commands.only-player"));
+            sender.sendMessage(messages.chat("commands.only-player"));
             return true;
         }
         if (command.getName().equalsIgnoreCase("shout")) {
             if (arguments.length == 0) {
-                player.sendMessage(messages.component("chat.shout-usage"));
+                player.sendMessage(messages.chat("chat.shout-usage"));
             } else {
                 networkChat.shout(player, String.join(" ", arguments));
             }
@@ -84,13 +84,13 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
             } else if (arguments.length == 2) {
                 exchange.executeCommand(player, arguments[1]);
             } else {
-                player.sendMessage(messages.component("menus.exchange.usage"));
+                player.sendMessage(messages.chat("menus.exchange.usage"));
             }
             return true;
         }
         if (arguments[0].equalsIgnoreCase("redeem")) {
             if (arguments.length != 2) {
-                player.sendMessage(messages.component("redeem.usage"));
+                player.sendMessage(messages.chat("redeem.usage"));
             } else {
                 redeem(player, arguments[1]);
             }
@@ -98,7 +98,7 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
         }
         if (arguments[0].equalsIgnoreCase("shout")) {
             if (arguments.length < 2) {
-                player.sendMessage(messages.component("chat.shout-usage"));
+                player.sendMessage(messages.chat("chat.shout-usage"));
             } else {
                 networkChat.shout(player, String.join(" ", java.util.Arrays.copyOfRange(
                     arguments, 1, arguments.length
@@ -139,10 +139,10 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
     private void redeem(Player player, String code) {
         RedeemCodeService service = providers.find(RedeemCodeServiceProvider.KEY).orElse(null);
         if (service == null) {
-            player.sendMessage(messages.component("redeem.service-unavailable"));
+            player.sendMessage(messages.chat("redeem.service-unavailable"));
             return;
         }
-        player.sendMessage(messages.component("redeem.processing"));
+        player.sendMessage(messages.chat("redeem.processing"));
         service.redeem(new RedeemRequest(
             player.getUniqueId(), code, "game:" + UUID.randomUUID(), "GAME_COMMAND"
         )).whenComplete((result, failure) -> platformTasks.callMain(() -> {
@@ -151,7 +151,7 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
             }
             if (failure != null) {
                 logger.warn("Redeem command failed", failure);
-                player.sendMessage(messages.component("redeem.failed"));
+                player.sendMessage(messages.chat("redeem.failed"));
             } else {
                 showResult(player, result);
             }
@@ -161,14 +161,14 @@ final class PaperMenuController implements CommandExecutor, TabCompleter {
 
     private void showResult(Player player, RedeemResult result) {
         if ("COMPLETED".equals(result.status())) {
-            player.sendMessage(messages.component("redeem.completed"));
-            result.rewards().forEach(reward -> player.sendMessage(messages.component(
+            player.sendMessage(messages.chat("redeem.completed"));
+            result.rewards().forEach(reward -> player.sendMessage(messages.chat(
                 "redeem.reward", java.util.Map.of("reward", reward.description())
             )));
         } else if ("REVIEW_REQUIRED".equals(result.status())) {
-            player.sendMessage(messages.component("redeem.review-required"));
+            player.sendMessage(messages.chat("redeem.review-required"));
         } else {
-            player.sendMessage(messages.component("redeem.incomplete"));
+            player.sendMessage(messages.chat("redeem.incomplete"));
         }
     }
 }

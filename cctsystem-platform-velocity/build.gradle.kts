@@ -4,6 +4,7 @@ plugins {
 
 dependencies {
     implementation(project(":cctsystem-core"))
+    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.22.1")
     implementation(project(":cctsystem-storage-mysql"))
     implementation(project(":cctsystem-bridge"))
     implementation(project(":cctsystem-domain-identity"))

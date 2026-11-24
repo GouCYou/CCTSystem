@@ -177,6 +177,8 @@ menus:
     prefix-lore: ["&7管理前缀库与后缀库"]
     nickname-name: "&a匿名模式"
     nickname-lore: ["&7打开 /cct nick 匿名身份设置"]
+    mail-name: "&a邮件"
+    mail-lore: ["&7在聊天栏查看未读邮件与待领取附件"]
     close-name: "&c关闭"
 
   membership:
@@ -343,6 +345,9 @@ discount-code:
   title: '&6折扣代码'
   apply: '&a应用'
   applying: '&e正在应用…'
+  applied: '&a已应用折扣代码，会员价格已更新。'
+  cleared: '&a已清除折扣代码。'
+  service-unavailable: '&c暂时无法连接会员服务，请稍后重新应用折扣代码。'
   invalid: '&c折扣代码无效、已失效或不适用于此会员。'
   saved: '&a折扣代码 {code} 已保存。编号：{id}'
   deleted: '&a折扣代码已删除。'

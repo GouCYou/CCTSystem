@@ -4,11 +4,13 @@ import cn.cctstudio.cctsystem.bridge.BridgeClient;
 import cn.cctstudio.cctsystem.bridge.BridgeProvider;
 import cn.cctstudio.cctsystem.bridge.BridgeRpcClientProvider;
 import cn.cctstudio.cctsystem.bridge.BridgeRpcRouter;
+import cn.cctstudio.cctsystem.contract.NodeRole;
 import cn.cctstudio.cctsystem.contract.PlatformType;
 import cn.cctstudio.cctsystem.core.CctRuntime;
 import cn.cctstudio.cctsystem.core.config.CctConfig;
 import cn.cctstudio.cctsystem.core.config.ConfigException;
 import cn.cctstudio.cctsystem.core.config.ConfigLoader;
+import cn.cctstudio.cctsystem.core.config.PremiumLoginConfig;
 import cn.cctstudio.cctsystem.exchange.ExchangeRpcModule;
 import cn.cctstudio.cctsystem.exchange.ExchangeRuntimeModule;
 import cn.cctstudio.cctsystem.auth.AuthModule;
@@ -19,6 +21,7 @@ import cn.cctstudio.cctsystem.points.PointsRpcModule;
 import cn.cctstudio.cctsystem.points.PointsRuntimeModule;
 import cn.cctstudio.cctsystem.promotion.PromotionRuntimeModule;
 import cn.cctstudio.cctsystem.membership.MembershipRpcModule;
+import cn.cctstudio.cctsystem.membership.LoopbackMembership;
 import cn.cctstudio.cctsystem.membership.MembershipRuntimeModule;
 import cn.cctstudio.cctsystem.membership.RemoteMembershipModule;
 import cn.cctstudio.cctsystem.redeem.RedeemRpcModule;
@@ -32,6 +35,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.UUID;
 import net.luckperms.api.LuckPerms;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public final class PaperBootstrap extends JavaPlugin {
@@ -68,6 +72,9 @@ public final class PaperBootstrap extends JavaPlugin {
             prepareCustomizationResources();
             CctConfig config = new ConfigLoader().load(configPath);
             PaperMessages messages = new PaperMessages(this);
+            if (!config.roles().contains(NodeRole.AUTH_AUTHORITY)) {
+                getServer().getPluginManager().registerEvents(new PaperFriendMessages(this), this);
+            }
             PaperMenus menuDefinitions = new PaperMenus(this);
             PaperTaskExecutor platformTasks = new PaperTaskExecutor(this);
             CctRuntime created = new CctRuntime(
@@ -182,6 +189,8 @@ public final class PaperBootstrap extends JavaPlugin {
                 titles
             );
             getServer().getPluginManager().registerEvents(exchangeMenu, this);
+            var mailbox = new PaperMailbox(this, created, platformTasks);
+            mailbox.register();
             PaperMembershipMenu membershipMenu = new PaperMembershipMenu(
                 this,
                 created.providers(),
@@ -193,7 +202,8 @@ public final class PaperBootstrap extends JavaPlugin {
                 messages,
                 menuDefinitions,
                 titleService,
-                nicknames
+                nicknames,
+                mailbox
             );
             getServer().getPluginManager().registerEvents(membershipMenu, this);
             PaperMenuController menus = new PaperMenuController(
@@ -226,7 +236,7 @@ public final class PaperBootstrap extends JavaPlugin {
                 cctAdminCommand.setUsage(messages.raw("commands.admin-usage"));
                 PaperPromotionAdminCommand admin = new PaperPromotionAdminCommand(
                     created.providers(), platformTasks, config, logger,
-                    messages, menuDefinitions, titleService
+                    messages, menuDefinitions, titleService, mailbox
                 );
                 cctAdminCommand.setExecutor(admin);
                 cctAdminCommand.setTabCompleter(admin);
@@ -244,6 +254,7 @@ public final class PaperBootstrap extends JavaPlugin {
                     config.membership().purchaseBlockedGroups()
                 );
             }
+            configurePremiumLogin(created, platformTasks);
             runtime = created;
             created.start().whenComplete((ignored, throwable) -> {
                 if (throwable == null) {
@@ -301,6 +312,7 @@ public final class PaperBootstrap extends JavaPlugin {
         saveResourceIfMissing("messages.yml");
         saveResourceIfMissing("rank-benefits.yml");
         saveResourceIfMissing("anti-redstone.yml");
+        saveResourceIfMissing("membership-local.yml");
         for (String menu : java.util.List.of(
             "personal", "membership", "exchange", "upgrade", "confirmation", "nickname", "rewards"
         )) {
@@ -323,7 +335,7 @@ public final class PaperBootstrap extends JavaPlugin {
         if (command == null) return;
         command.setExecutor((sender, ignored, label, arguments) -> {
             if (!(sender instanceof org.bukkit.entity.Player player)) {
-                sender.sendMessage(messages.component("commands.only-player"));
+                sender.sendMessage(messages.chat("commands.only-player"));
                 return true;
             }
             if (open) nicknames.command(player, arguments); else nicknames.disable(player);
@@ -340,12 +352,46 @@ public final class PaperBootstrap extends JavaPlugin {
         if (command == null) return;
         command.setExecutor((sender, ignored, label, arguments) -> {
             if (!(sender instanceof org.bukkit.entity.Player player)) {
-                sender.sendMessage(messages.component("commands.only-player"));
+                sender.sendMessage(messages.chat("commands.only-player"));
                 return true;
             }
             action.accept(player);
             return true;
         });
+    }
+
+    private void configurePremiumLogin(CctRuntime created, PaperTaskExecutor tasks) {
+        try {
+            PremiumLoginConfig premium = PremiumLoginConfig.load(getDataFolder().toPath());
+            if (!premium.enabled()) return;
+            CctConfig config = created.config();
+            if (!config.database().enabled()) {
+                getLogger().warning("Java login requires the shared CCTSystem database on this Paper server");
+                return;
+            }
+            PaperPremiumLogin login = new PaperPremiumLogin(this, created, premium);
+            if (premium.loginServer().equals(config.serverId()) || premium.titleServer().equals(config.serverId())) {
+                getServer().getPluginManager().registerEvents(login, this);
+            }
+            if (premium.loginServer().equals(config.serverId())) {
+                var authMe = getServer().getPluginManager().getPlugin("AuthMe");
+                if (authMe == null || !authMe.isEnabled() || authMe.getConfig().getBoolean("settings.enablePremium")) {
+                    getLogger().warning("Java login requires AuthMe with its own premium mode disabled");
+                } else {
+                    getServer().getPluginManager().registerEvents(login.authListener(), this);
+                }
+            }
+            if (premium.rewardServer().equals(config.serverId())) {
+                if (!config.roles().containsAll(java.util.Set.of(NodeRole.BUSINESS_AUTHORITY, NodeRole.POINTS_AUTHORITY))) {
+                    getLogger().warning("Java login reward server requires business-authority and points-authority roles");
+                    return;
+                }
+                PaperPremiumRewards worker = new PaperPremiumRewards(this, created, tasks, login);
+                getServer().getScheduler().runTaskTimer(this, worker::poll, 100L, 40L);
+            }
+        } catch (java.io.IOException | RuntimeException exception) {
+            getLogger().warning("Java login was disabled on this Paper server. Check premium-login.yml and AuthMe.");
+        }
     }
 
     private void configureInfrastructure(
@@ -403,12 +449,35 @@ public final class PaperBootstrap extends JavaPlugin {
         created.registerModule(new ExchangeRuntimeModule());
         created.registerModule(new ExchangeRpcModule());
         created.registerModule(new PromotionRuntimeModule());
-        created.registerModule(new MembershipRuntimeModule());
-        created.registerModule(new MembershipRpcModule());
-        created.registerModule(new RemoteMembershipModule());
+        configureMembership(created, logger);
         created.registerModule(new RedeemRuntimeModule());
         created.registerModule(new RedeemRpcModule());
         created.registerModule(new RemoteRedeemModule());
         created.registerModule(new PaperAdminRpcModule(this));
+    }
+
+    private void configureMembership(CctRuntime runtime, PaperLogger logger) {
+        var local = YamlConfiguration.loadConfiguration(getDataFolder().toPath().resolve("membership-local.yml").toFile());
+        if (!local.getBoolean("enabled")) {
+            runtime.registerModule(new MembershipRuntimeModule());
+            runtime.registerModule(new MembershipRpcModule());
+            runtime.registerModule(new RemoteMembershipModule());
+            return;
+        }
+        CctConfig config = runtime.config();
+        String authorityId = local.getString("authority-server-id", "lobby");
+        if (authorityId == null || !authorityId.matches("[a-z0-9][a-z0-9_-]{0,63}")) {
+            throw new IllegalArgumentException("Invalid membership-local.yml authority-server-id");
+        }
+        boolean authority = config.serverId().equals(authorityId);
+        if (authority) {
+            if (!config.roles().contains(NodeRole.BUSINESS_AUTHORITY)) {
+                throw new IllegalArgumentException("The local membership authority requires the business-authority role");
+            }
+            runtime.registerModule(new MembershipRuntimeModule());
+            runtime.registerModule(new MembershipRpcModule());
+        }
+        new LoopbackMembership(runtime, logger, authority, local.getInt("port", 28471),
+            local.getString("secret", "")).install();
     }
 }
